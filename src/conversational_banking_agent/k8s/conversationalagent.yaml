@@ -1,0 +1,122 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: conversationalagent
+  labels:
+    application: bank-of-anthos
+    tier: frontend
+spec:
+  selector:
+    app: conversationalagent
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conversationalagent
+  labels:
+    application: bank-of-anthos
+    tier: frontend
+spec:
+  selector:
+    matchLabels:
+      app: conversationalagent
+  template:
+    metadata:
+      labels:
+        app: conversationalagent
+        application: bank-of-anthos
+        tier: frontend
+    spec:
+      serviceAccountName: bank-of-anthos
+      terminationGracePeriodSeconds: 5
+      containers:
+        - name: conversationalagent
+          image: conversationalagent
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: PORT
+              value: "8080"
+            - name: VERSION
+              value: "v0.1.0"
+            - name: ENV_PLATFORM
+              value: local
+            - name: BALANCES_API_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: service-api-config
+                  key: BALANCES_API_ADDR
+            - name: TRANSACTIONS_API_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: service-api-config
+                  key: TRANSACTIONS_API_ADDR
+            - name: HISTORY_API_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: service-api-config
+                  key: HISTORY_API_ADDR
+            - name: CONTACTS_API_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: service-api-config
+                  key: CONTACTS_API_ADDR
+            - name: USERSERVICE_API_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: service-api-config
+                  key: USERSERVICE_API_ADDR
+            - name: LOCAL_ROUTING_NUM
+              valueFrom:
+                configMapKeyRef:
+                  name: environment-config
+                  key: LOCAL_ROUTING_NUM
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gemini-api-key
+                  key: api-key
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthy
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: publickey
+              mountPath: /tmp/.ssh
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: publickey
+          secret:
+            secretName: jwt-key
+            items:
+              - key: jwtRS256.key.pub
+                path: publickey
+        - name: tmp
+          emptyDir: {}
