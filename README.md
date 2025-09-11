@@ -34,6 +34,11 @@ If you are using Bank of Anthos, please ★Star this repository to show your int
 | [user-service](/src/accounts/userservice)              | Python        | Manages user accounts and authentication. Signs JWTs used for authentication by other services.                                              |
 | [contacts](/src/accounts/contacts)                     | Python        | Stores list of other accounts associated with a user. Used for drop down in "Send Payment" and "Deposit" forms.                              |
 | [accounts-db](/src/accounts/accounts-db)               | PostgreSQL    | Database for user accounts and associated data. Option to pre-populate with demo users.                                                      |
+| [conversational-agent](/src/conversational-agent)        | Python        | Provides a conversational AI interface for customers to interact with their accounts using natural language.                               |
+
+### Conversational Banking Agent
+
+The [Conversational Banking Agent](/src/conversational_banking_agent/README.md) is a Python-based microservice that provides a conversational AI interface for Bank of Anthos customers. It uses natural language understanding to process banking queries and can perform tasks like checking balances, transferring funds, and viewing transaction history. The agent is designed to be easily integrated into the existing Bank of Anthos architecture and can be deployed as a separate microservice.
 
 ## Interactive quickstart (GKE)
 
@@ -79,6 +84,7 @@ The following button opens up an interactive tutorial showing how to deploy Bank
    ```sh
    kubectl apply -f ./extras/jwt/jwt-secret.yaml
    kubectl apply -f ./kubernetes-manifests
+   kubectl apply -f ./kubernetes-manifests/conversational-agent.yaml
    ```
 
 6. Wait for the pods to be ready.
@@ -94,6 +100,7 @@ The following button opens up an interactive tutorial showing how to deploy Bank
    accounts-db-6f589464bc-6r7b7          1/1     Running   0          99s
    balancereader-797bf6d7c5-8xvp6        1/1     Running   0          99s
    contacts-769c4fb556-25pg2             1/1     Running   0          98s
+   conversational-agent-1a2b3c4d5e-6f7g8   1/1     Running   0          98s
    frontend-7c96b54f6b-zkdbz             1/1     Running   0          98s
    ledger-db-5b78474d4f-p6xcb            1/1     Running   0          98s
    ledgerwriter-84bf44b95d-65mqf         1/1     Running   0          97s
@@ -121,6 +128,7 @@ The following button opens up an interactive tutorial showing how to deploy Bank
 
 ## Additional deployment options
 
+- **Conversational AI Agent**: [See these instructions](/src/conversational_banking_agent/README.md) to learn how to deploy and use the conversational AI agent.
 - **Workload Identity**: [See these instructions.](/docs/workload-identity.md)
 - **Cloud SQL**: [See these instructions](/extras/cloudsql) to replace the in-cluster databases with hosted Google Cloud SQL.
 - **Multi Cluster with Cloud SQL**: [See these instructions](/extras/cloudsql-multicluster) to replicate the app across two regions using GKE, Multi Cluster Ingress, and Google Cloud SQL.

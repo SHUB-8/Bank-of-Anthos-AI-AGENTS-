@@ -15,7 +15,31 @@ required tools built-in.
 
 1. [Docker Engine or Docker Desktop](https://www.docker.com/)
 1. [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl/) (can be installed separately or via [gcloud](https://cloud.google.com/sdk/install))
+1. # Development Guide
+
+This document describes how to develop and add features to the Bank of Anthos application in your local environment.
+
+**For a comprehensive guide on setting up a local development environment, see the [Local Development Setup](./LOCAL_DEVELOPMENT.md) guide.**
+
+## Prerequisites 
+
+1. [A Google Cloud project](https://cloud.google.com/resource-manager/docs/creating-managing-projects), connected to your billing account. 
+2. [A GKE cluster in your project](https://cloud.google.com/kubernetes-engine/docs/how-to/creating-an-autopilot-cluster).
+
+## Installing required tools
+
+You can use MacOS or Linux as your dev environment - all these languages and tools support both.
+Additionally, you can use [Cloud Shell](https://cloud.google.com/shell) which comes with most
+required tools built-in.
+
+1. [Docker Engine or Docker Desktop](https://www.docker.com/)
+1. [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl/) (can be installed separately or via [gcloud](https://cloud.google.com/sdk/install))
 1. [skaffold **2.9+**](https://skaffold.dev/docs/install/) (latest version recommended)
+1. [OpenJDK **21+**](https://openjdk.java.net/projects/jdk/21/) (newer versions not tested)
+1. [Maven **3.9+**](https://downloads.apache.org/maven/maven-3/) (newer versions not tested)
+1. [Python **3.12+**](https://www.python.org/downloads/)
+1. [piptools](https://pypi.org/project/pip-tools/)
+
 1. [OpenJDK **21+**](https://openjdk.java.net/projects/jdk/21/) (newer versions not tested)
 1. [Maven **3.9+**](https://downloads.apache.org/maven/maven-3/) (newer versions not tested)
 1. [Python **3.12+**](https://www.python.org/downloads/)

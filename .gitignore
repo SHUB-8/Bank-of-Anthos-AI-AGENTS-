@@ -211,3 +211,33 @@ venv-*
 
 # go for ci
 go/
+[ADDITIONAL SENSITIVE FILES]
+# Common sensitive files and patterns
+.env*
+*.pem
+*.p12
+*.jks
+*.pfx
+*.db
+*.sqlite*
+*.secrets*
+*.credentials*
+*.token*
+*.config
+*.config.*
+*.crt
+*.csr
+*.key
+*.pub
+*.log
+*.bak
+*.cache
+*.yaml
+*.yml
+*.json
+private*
+certificate*
+src/conversational_banking_agent/.env
+src/frontend/.env
+src/userservice/.env
+src/contacts/.env

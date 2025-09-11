@@ -84,7 +84,7 @@ spec:
           imagePullPolicy: IfNotPresent
           livenessProbe:
             httpGet:
-              path: /healthy
+              path: /
               port: 8080
             initialDelaySeconds: 60
             periodSeconds: 15
@@ -94,7 +94,7 @@ spec:
             - containerPort: 8080
           readinessProbe:
             httpGet:
-              path: /ready
+              path: /
               port: 8080
             initialDelaySeconds: 10
             periodSeconds: 5
@@ -118,7 +118,7 @@ spec:
           startupProbe:
             failureThreshold: 30
             httpGet:
-              path: /ready
+              path: /
               port: 8080
             periodSeconds: 10
           volumeMounts:
