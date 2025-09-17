@@ -37,9 +37,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("anomaly-sage")
 
 # --- Config from env
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:password@localhost:5432/ai_meta_db")
-TRANSACTION_HISTORY_URL = os.getenv("TRANSACTION_HISTORY_URL", "http://localhost:8086")
-USERSERVICE_URL = os.getenv("USERSERVICE_URL", "http://localhost:8085")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://ai_meta_admin:password@ai-meta-db:5432/ai_meta_db")
+TRANSACTION_HISTORY_URL = os.getenv("TRANSACTION_HISTORY_URL", "http://transactionhistory:8080")
+USERSERVICE_URL = os.getenv("USERSERVICE_URL", "http://userservice:8080")
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
@@ -91,7 +91,6 @@ class AnomalyCheckRequest(BaseModel):
     amount_cents: int
     recipient: str
     transaction_type: str = "transfer"
-    merchant_name: Optional[str] = None
     timestamp: Optional[datetime] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 

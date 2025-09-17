@@ -44,8 +44,8 @@ CREATE TABLE IF NOT EXISTS budget_usage (
 CREATE TABLE IF NOT EXISTS user_profiles (
     profile_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     account_id CHARACTER(10) UNIQUE,
-    mean_txn_amount INTEGER,
-    stddev_txn_amount INTEGER,
+    mean_txn_amount_cents INTEGER,
+    stddev_txn_amount_cents INTEGER,
     active_hours INTEGER[],
     threshold_suspicious_multiplier NUMERIC DEFAULT 2.0,
     threshold_fraud_multiplier NUMERIC DEFAULT 3.0,

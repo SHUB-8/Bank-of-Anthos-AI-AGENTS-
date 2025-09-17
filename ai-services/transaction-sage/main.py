@@ -36,11 +36,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("transaction-sage")
 
 # --- Config
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:password@localhost:5432/ai_meta_db")
-LEDGER_WRITER_URL = os.getenv("LEDGER_WRITER_URL", "http://localhost:8088")
-BALANCE_READER_URL = os.getenv("BALANCE_READER_URL", "http://localhost:8087")
-TRANSACTION_HISTORY_URL = os.getenv("TRANSACTION_HISTORY_URL", "http://localhost:8086")
-USERSERVICE_URL = os.getenv("USERSERVICE_URL", "http://localhost:8085")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://ai_meta_admin:password@ai-meta-db:5432/ai_meta_db")
+LEDGER_WRITER_URL = os.getenv("LEDGER_WRITER_URL", "http://ledgerwriter:8080")
+BALANCE_READER_URL = os.getenv("BALANCE_READER_URL", "http://balancereader:8080")
+TRANSACTION_HISTORY_URL = os.getenv("TRANSACTION_HISTORY_URL", "http://transactionhistory:8080")
+USERSERVICE_URL = os.getenv("USERSERVICE_URL", "http://userservice:8080")
 
 
 # --- DB setup
