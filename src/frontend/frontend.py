@@ -617,7 +617,7 @@ def create_app():
     def chat():
         """
         Handle chat requests to conversational agent.
-        Expects JSON: {"message": "user query", "session_id": "optional"}
+        Expects JSON: {"message": "user query"}
         Returns JSON response from conversational agent.
         Requires user to be logged in.
         """
@@ -633,27 +633,27 @@ def create_app():
                 return jsonify({"error": "Message required"}), 400
             
             # Get conversational agent URL
-            conversational_agent_addr = os.getenv('CONVERSATIONALAGENT_ADDR', 'conversationalagent:8080')
-            conversational_agent_url = f"http://{conversational_agent_addr}/chat"
+            orchestrator_addr = os.getenv('ORCHESTRATOR_API_ADDR', 'http://orchestrator:8000')
+            orchestrator_url = f"{orchestrator_addr}/query"
             
             # Prepare request for conversational agent
             token_data = decode_token(token)
-            user_id = token_data.get('user_id', 'unknown')
+            account_id = token_data['acct']
             
             payload = {
                 "query": data['message'],
-                "token": token,
-                "session_id": data.get('session_id', f"session-{user_id}")
+                "account_id": account_id
             }
             
             headers = {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {token}'
             }
             
             # Forward request to conversational agent
-            app.logger.info(f"Sending request to {conversational_agent_url} with payload: {payload}")
+            app.logger.info(f"Sending request to {orchestrator_url} with payload: {payload}")
             response = requests.post(
-                conversational_agent_url,
+                orchestrator_url,
                 json=payload,
                 headers=headers,
                 timeout=app.config['BACKEND_TIMEOUT']
@@ -663,20 +663,7 @@ def create_app():
             if response.status_code == 200:
                 try:
                     agent_response = response.json()
-                    if agent_response is None:
-                        app.logger.error("Conversational agent returned null response")
-                        return jsonify({"error": "Chat service returned invalid response"}), 503
-                    
-                    # Transform conversational agent response to frontend-compatible format
-                    webhook_data = agent_response.get("webhook_data") or {}
-                    frontend_response = {
-                        "response": agent_response.get("response", "I'm sorry, I couldn't process your request."),
-                        "intent": agent_response.get("intent", "unknown"),
-                        "confidence": agent_response.get("confidence", 0.0),
-                        "action_taken": webhook_data.get("action_taken", False),
-                        "requires_confirmation": webhook_data.get("requires_confirmation", False)
-                    }
-                    return jsonify(frontend_response)
+                    return jsonify(agent_response)
                 except ValueError as json_error:
                     app.logger.error("Failed to parse conversational agent response: %s", json_error)
                     app.logger.error("Raw response: %s", response.text)
@@ -693,6 +680,40 @@ def create_app():
             import traceback
             app.logger.error("Chat handler traceback: %s", traceback.format_exc())
             return jsonify({"error": "Internal error"}), 500
+
+    @app.route('/notifications', methods=['GET'])
+    def notifications():
+        """
+        Fetches notifications for the current user.
+        """
+        token = request.cookies.get(app.config['TOKEN_NAME'])
+        if not verify_token(token):
+            return jsonify({"error": "Authentication required. Please log in."}), 401
+
+        try:
+            token_data = decode_token(token)
+            user_id = token_data['user']
+
+            orchestrator_addr = os.getenv('ORCHESTRATOR_API_ADDR', 'http://orchestrator:8000')
+            notifications_url = f"{orchestrator_addr}/notifications/{user_id}"
+
+            headers = {
+                'Authorization': f'Bearer {token}'
+            }
+
+            response = requests.get(
+                notifications_url,
+                headers=headers,
+                timeout=app.config['BACKEND_TIMEOUT']
+            )
+
+            if response.status_code == 200:
+                return jsonify(response.json())
+            else:
+                return jsonify([]), response.status_code
+        except Exception as e:
+            app.logger.error("Failed to fetch notifications: %s", str(e))
+            return jsonify({"error": "Failed to fetch notifications"}), 500
 
     def decode_token(token):
         return jwt.decode(algorithms='RS256',

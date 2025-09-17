@@ -24,21 +24,29 @@ If you are using Bank of Anthos, please ★Star this repository to show your int
 
 ![Architecture Diagram](/docs/img/architecture.png)
 
-| Service                                                 | Language      | Description                                                                                                                                  |
-| ------------------------------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| [frontend](/src/frontend)                              | Python        | Exposes an HTTP server to serve the website. Contains login page, signup page, and home page.                                                |
-| [ledger-writer](/src/ledger/ledgerwriter)              | Java          | Accepts and validates incoming transactions before writing them to the ledger.                                                               |
-| [balance-reader](/src/ledger/balancereader)            | Java          | Provides efficient readable cache of user balances, as read from `ledger-db`.                                                                |
-| [transaction-history](/src/ledger/transactionhistory)  | Java          | Provides efficient readable cache of past transactions, as read from `ledger-db`.                                                            |
-| [ledger-db](/src/ledger/ledger-db)                     | PostgreSQL    | Ledger of all transactions. Option to pre-populate with transactions for demo users.                                                         |
-| [user-service](/src/accounts/userservice)              | Python        | Manages user accounts and authentication. Signs JWTs used for authentication by other services.                                              |
-| [contacts](/src/accounts/contacts)                     | Python        | Stores list of other accounts associated with a user. Used for drop down in "Send Payment" and "Deposit" forms.                              |
-| [accounts-db](/src/accounts/accounts-db)               | PostgreSQL    | Database for user accounts and associated data. Option to pre-populate with demo users.                                                      |
-| [conversational-agent](/src/conversational-agent)        | Python        | Provides a conversational AI interface for customers to interact with their accounts using natural language.                               |
 
-### Conversational Banking Agent
+| Service                                                 | Language      | Description                                                                                                                                |
+| ------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| [frontend](/src/frontend)                              | Python        | Exposes an HTTP server to serve the website. Contains login page, signup page, and home page.                                              |
+| [ledger-writer](/src/ledger/ledgerwriter)              | Java          | Accepts and validates incoming transactions before writing them to the ledger.                                                             |
+| [balance-reader](/src/ledger/balancereader)            | Java          | Provides efficient readable cache of user balances, as read from `ledger-db`.                                                              |
+| [transaction-history](/src/ledger/transactionhistory)  | Java          | Provides efficient readable cache of past transactions, as read from `ledger-db`.                                                          |
+| [ledger-db](/src/ledger/ledger-db)                     | PostgreSQL    | Ledger of all transactions. Option to pre-populate with transactions for demo users.                                                       |
+| [user-service](/src/accounts/userservice)              | Python        | Manages user accounts and authentication. Signs JWTs used for authentication by other services.                                            |
+| [contacts](/src/accounts/contacts)                     | Python        | Stores list of other accounts associated with a user. Used for drop down in "Send Payment" and "Deposit" forms.                            |
+| [accounts-db](/src/accounts/accounts-db)               | PostgreSQL    | Database for user accounts and associated data. Option to pre-populate with demo users.                                                    |
+| [ai-meta-db](/ai-services/ai-meta-db)                  | PostgreSQL    | Central AI metadata database for anomaly detection, transaction logging, budget tracking, and user profiles.                               |
+| [anomaly-sage](/ai-services/anomaly-sage)              | Python        | AI microservice for risk analysis and anomaly detection. Logs results to `ai-meta-db`.                                                     |
+| [transaction-sage](/ai-services/transaction-sage)      | Python        | AI microservice for transaction categorization, logging, and budget usage. Logs results to `ai-meta-db`.                                   |
 
-The [Conversational Banking Agent](/src/conversational_banking_agent/README.md) is a Python-based microservice that provides a conversational AI interface for Bank of Anthos customers. It uses natural language understanding to process banking queries and can perform tasks like checking balances, transferring funds, and viewing transaction history. The agent is designed to be easily integrated into the existing Bank of Anthos architecture and can be deployed as a separate microservice.
+
+### AI Agent Microservices
+
+**anomaly-sage**: Performs risk analysis and anomaly detection on transactions. It writes risk scores and classifications to the `anomaly_logs` table in `ai-meta-db`.
+
+**transaction-sage**: Categorizes transactions, logs details, and tracks budget usage. It writes to the `transaction_logs` and `budget_usage` tables in `ai-meta-db`.
+
+**ai-meta-db**: Central PostgreSQL database for AI agent microservices. Stores logs, budgets, user profiles, and pending confirmations. See [README-ai-meta-db.md](/ai-services/README-ai-meta-db.md) for schema details.
 
 ## Interactive quickstart (GKE)
 
@@ -128,7 +136,7 @@ The following button opens up an interactive tutorial showing how to deploy Bank
 
 ## Additional deployment options
 
-- **Conversational AI Agent**: [See these instructions](/src/conversational_banking_agent/README.md) to learn how to deploy and use the conversational AI agent.
+
 - **Workload Identity**: [See these instructions.](/docs/workload-identity.md)
 - **Cloud SQL**: [See these instructions](/extras/cloudsql) to replace the in-cluster databases with hosted Google Cloud SQL.
 - **Multi Cluster with Cloud SQL**: [See these instructions](/extras/cloudsql-multicluster) to replicate the app across two regions using GKE, Multi Cluster Ingress, and Google Cloud SQL.

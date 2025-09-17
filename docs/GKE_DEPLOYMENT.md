@@ -78,22 +78,20 @@ gcloud container clusters get-credentials bank-of-anthos-cluster --region=$REGIO
 Now you can deploy the Bank of Anthos application to your GKE cluster.
 
 1.  **Create the JWT secret:**
-
     ```sh
     kubectl apply -f ./extras/jwt/jwt-secret.yaml
     ```
 
-2.  **Deploy the core services:**
-
+2.  **Deploy the core services and AI agent microservices:**
     ```sh
-    kubectl apply -f ./kubernetes-manifests
+    kubectl apply -f ./kubernetes-manifests/ai-meta-db-pvc.yaml
+    kubectl apply -f ./kubernetes-manifests/ai-meta-db.yaml
+    kubectl apply -f ./kubernetes-manifests/anomaly-sage.yaml
+    kubectl apply -f ./kubernetes-manifests/transaction-sage.yaml
+    # Apply other manifests as needed
     ```
 
-3.  **Deploy the Conversational AI Agent:**
-
-    ```sh
-    kubectl apply -f ./kubernetes-manifests/conversational-agent.yaml
-    ```
+**Note:** The conversational agent is not present in the current setup. Only the AI agent services (`anomaly-sage`, `transaction-sage`, `ai-meta-db`) are deployed.
 
 ## 5. Verify the Deployment
 

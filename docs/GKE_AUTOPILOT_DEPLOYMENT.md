@@ -61,14 +61,14 @@ Now you can deploy the Bank of Anthos application to your GKE cluster.
 1)  **Create the JWT secret:**
 
      ```powershell
-     kubectl apply -f ./kubernetes-manifests
+     kubectl apply -f ./kubernetes-manifests/ai-meta-db-pvc.yaml
+     kubectl apply -f ./kubernetes-manifests/ai-meta-db.yaml
+     kubectl apply -f ./kubernetes-manifests/anomaly-sage.yaml
+     kubectl apply -f ./kubernetes-manifests/transaction-sage.yaml
+     # Apply other manifests as needed
      ```
 
-2)  **Deploy the core services and the conversational agent:**
-
-    ```powershell
-    kubectl apply -f ./kubernetes-manifests
-    ```
+**Note:** The conversational agent is not present in the current setup. Only the AI agent services (`anomaly-sage`, `transaction-sage`, `ai-meta-db`) are deployed.
 
 
 ## 5. Verify the Deployment

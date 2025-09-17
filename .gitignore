@@ -237,7 +237,7 @@ go/
 *.json
 private*
 certificate*
-src/conversational_banking_agent/.env
+ai-services/conversational_banking_agent/.env
 src/frontend/.env
 src/userservice/.env
 src/contacts/.env
