@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy.dialects.postgresql import JSONB
 
 import httpx
-from fastapi import FastAPI, Depends, Header, HTTPException
+from fastapi import FastAPI, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import ARRAY, Column, DateTime, Float, Integer, String, Text, Boolean, and_, select
 from sqlalchemy.dialects.postgresql import UUID, NUMERIC
