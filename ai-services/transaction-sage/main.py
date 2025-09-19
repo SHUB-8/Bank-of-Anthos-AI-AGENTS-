@@ -36,11 +36,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("transaction-sage")
 
 # --- Config
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://ai_meta_admin:password@ai-meta-db:5432/ai_meta_db")
-LEDGER_WRITER_URL = os.getenv("LEDGER_WRITER_URL", "http://ledgerwriter:8080")
-BALANCE_READER_URL = os.getenv("BALANCE_READER_URL", "http://balancereader:8080")
-TRANSACTION_HISTORY_URL = os.getenv("TRANSACTION_HISTORY_URL", "http://transactionhistory:8080")
-USERSERVICE_URL = os.getenv("USERSERVICE_URL", "http://userservice:8080")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@ai-meta-db:5432/ai_meta_db")
+LEDGER_WRITER_URL = os.getenv("LEDGER_WRITER_URL", "http://ledgerwriter:8088")
 
 
 # --- DB setup
@@ -229,7 +226,7 @@ async def execute_transaction(
     ledger_payload = {
         "fromAccountId": req.account_id,
         "toAccountId": req.recipient_account_id,
-        "amount": req.amount_cents,
+        "amount": req.amount_cents / 100.0, # Convert cents to dollars for ledger
         "description": req.description or ""
     }
 
@@ -237,20 +234,19 @@ async def execute_transaction(
     if authorization:
         headers["Authorization"] = authorization
 
-    # Call ledger writer (mocked for local testing)
+    # Call ledger writer
     try:
         resp = await http_client.request("POST", f"{LEDGER_WRITER_URL}/transactions", json=ledger_payload, headers=headers)
-        if resp.status_code in (200, 201):
-            ledger_resp = resp.json()
-            txn_id = ledger_resp.get("transaction_id")
-            new_balance = ledger_resp.get("new_balance") or ledger_resp.get("balance")
-        else:
-            raise Exception("Ledger returned error")
+        resp.raise_for_status() # Raise an exception for 4xx or 5xx responses
+        ledger_resp = resp.json()
+        txn_id = ledger_resp.get("transaction_id")
+        new_balance = ledger_resp.get("new_balance") or ledger_resp.get("balance")
     except Exception as e:
-        logger.warning("Ledger call failed or unavailable, using dummy response: %s", e)
-        txn_id = 1234567890  # Dummy BIGINT for local testing
-        new_balance = 100000.0  # Dummy balance
-        # Do not raise HTTPException, continue with dummy response
+        logger.error("Ledger call failed: %s", e)
+        if idempotency_key and key_row:
+            key_row.status = "failed"
+            await db.commit()
+        raise HTTPException(status_code=502, detail="The transaction could not be posted to the ledger.")
 
     # Persist transaction log
     try:

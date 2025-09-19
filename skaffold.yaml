@@ -1,70 +1,41 @@
-apiVersion: skaffold/v4beta5
+# Copyright 2022 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may not obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+apiVersion: skaffold/v4beta1
 kind: Config
 metadata:
-  name: bank-of-anthos-ai-services
-
-build:
-  artifacts:
-    - image: frontend
-      context: src/frontend
-    - image: conversational-banking-agent
-      context: ai-services/conversational_banking_agent
-    - image: transaction-sage
-      context: ai-services/transaction-sage
-    - image: money-sage
-      context: ai-services/money-sage
-    - image: contact-sage
-      context: ai-services/contact-sage
-    - image: transaction-intel
-      context: ai-services/transaction-intel
-    - image: anomaly-sage
-      context: ai-services/anomaly-sage
-  local:
-    push: false
-
-# Base manifests that are always deployed
-manifests:
-  rawYaml:
-    - kubernetes-manifests/ai-meta-db.yaml
-    - kubernetes-manifests/ai-meta-db-init-script.yaml
-
+  name: bank-of-anthos
+requires:
+- configs:
+  - accounts
+  path: src/accounts/skaffold.yaml
+- configs:
+  - ledger
+  path: src/ledger/skaffold.yaml
+- configs:
+  - frontend
+  path: src/frontend/skaffold.yaml
+- configs:
+  - loadgenerator
+  path: src/loadgenerator/skaffold.yaml
+- configs:
+  - accounts-db
+  path: src/accounts/accounts-db/skaffold.yaml
+- configs:
+  - ledger-db
+  path: src/ledger/ledger-db/skaffold.yaml
+- configs:
+  - ai-services
+  path: ai-services/skaffold.yaml
 deploy:
-  kubectl: {}
-
-# Profiles allow us to select which service(s) to run
-profiles:
-  - name: orchestrator
-    manifests:
-      rawYaml:
-        - kubernetes-manifests/conversational-banking-agent.yaml
-  - name: transaction-sage
-    manifests:
-      rawYaml:
-        - kubernetes-manifests/transaction-sage.yaml
-  - name: money-sage
-    manifests:
-      rawYaml:
-        - kubernetes-manifests/money-sage.yaml
-  - name: contact-sage
-    manifests:
-      rawYaml:
-        - kubernetes-manifests/contact-sage.yaml
-  - name: transaction-intel
-    manifests:
-      rawYaml:
-        - kubernetes-manifests/transaction-intel.yaml
-  - name: anomaly-sage
-    manifests:
-      rawYaml:
-        - kubernetes-manifests/anomaly-sage.yaml
-  - name: all-agents
-    activation:
-      - command: dev # Automatically activate when running skaffold dev
-    manifests:
-      rawYaml:
-        - kubernetes-manifests/conversational-banking-agent.yaml
-        - kubernetes-manifests/transaction-sage.yaml
-        - kubernetes-manifests/money-sage.yaml
-        - kubernetes-manifests/contact-sage.yaml
-        - kubernetes-manifests/transaction-intel.yaml
-        - kubernetes-manifests/anomaly-sage.yaml
+  tolerateFailuresUntilDeadline: true

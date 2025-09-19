@@ -1,5 +1,6 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- Tables for Anomaly-Sage & Transaction-Sage
 -- 1. anomaly_logs
 CREATE TABLE IF NOT EXISTS anomaly_logs (
     log_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -62,4 +63,46 @@ CREATE TABLE IF NOT EXISTS pending_confirmations (
     expires_at TIMESTAMPTZ NOT NULL,
     status TEXT CHECK (status IN ('pending','confirmed','expired','cancelled')) DEFAULT 'pending',
     confirmation_method TEXT
+);
+
+-- 7. idempotency_keys (for Transaction-Sage)
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+    key VARCHAR(255) PRIMARY KEY,
+    account_id CHARACTER(10) NOT NULL,
+    status VARCHAR NOT NULL DEFAULT 'in_progress',
+    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
+    response_payload JSONB
+);
+
+
+-- Tables for Orchestrator
+-- 8. llm_envelopes
+CREATE TABLE IF NOT EXISTS llm_envelopes (
+    envelope_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    session_id VARCHAR,
+    raw_llm JSONB NOT NULL,
+    validated_envelope JSONB NOT NULL,
+    correlation_id VARCHAR NOT NULL,
+    idempotency_key VARCHAR,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- 9. agent_memory
+CREATE TABLE IF NOT EXISTS agent_memory (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    session_id VARCHAR NOT NULL,
+    key VARCHAR NOT NULL,
+    value JSONB NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    expires_at TIMESTAMPTZ
+);
+
+-- 10. envelope_correlations
+CREATE TABLE IF NOT EXISTS envelope_correlations (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    envelope_id UUID NOT NULL,
+    anomaly_log_id UUID,
+    confirmation_id VARCHAR,
+    transaction_id VARCHAR,
+    created_at TIMESTAMPTZ DEFAULT now()
 );

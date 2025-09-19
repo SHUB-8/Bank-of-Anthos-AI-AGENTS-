@@ -1,0 +1,14 @@
+# GENERATED: Orchestrator - produced by Gemini CLI. Do not include mock or dummy data in production code.
+
+fastapi
+uvicorn[standard]
+httpx[http2]
+tenacity
+sqlalchemy[asyncio]
+asyncpg
+alembic
+pydantic>=2.0
+google-generativeai
+python-dotenv
+pytest
+respx

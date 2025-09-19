@@ -37,15 +37,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("anomaly-sage")
 
 # --- Config from env
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://ai_meta_admin:password@ai-meta-db:5432/ai_meta_db")
-TRANSACTION_HISTORY_URL = os.getenv("TRANSACTION_HISTORY_URL", "http://transactionhistory:8080")
-USERSERVICE_URL = os.getenv("USERSERVICE_URL", "http://userservice:8080")
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@ai-meta-db:5432/ai_meta_db")
+TRANSACTION_HISTORY_URL = os.getenv("TRANSACTION_HISTORY_URL", "http://transactionhistory:8086")
+TRANSACTION_SAGE_URL = os.getenv("TRANSACTION_SAGE_URL", "http://transaction-sage:8082")
 CONFIRMATION_TTL_SECONDS = int(os.getenv("CONFIRMATION_TTL_SECONDS", "3600"))  # 1 hour
-FRONTEND_URL = os.getenv("FRONTEND_URL", "https://bankofanthos.example.com")
 
 # --- Database setup
 engine = create_async_engine(DATABASE_URL, echo=False)
@@ -89,7 +84,8 @@ class PendingConfirmation(Base):
 class AnomalyCheckRequest(BaseModel):
     account_id: str
     amount_cents: int
-    recipient: str
+    recipient_account_id: str # CORRECTED: Was 'recipient'
+    description: Optional[str] = None # CORRECTED: Added description
     transaction_type: str = "transfer"
     timestamp: Optional[datetime] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
@@ -180,12 +176,7 @@ class AnomalyEngine:
                 return payload.get("transactions", [])
             logger.warning("transaction-history returned %s", resp.status_code)
         except Exception as e:
-            logger.warning("Failed to get transaction history: %s. Using dummy transactions.", e)
-            # Return dummy transactions for testing
-            return [
-                {"timestamp": datetime.utcnow().isoformat(), "recipientAccountId": "acc2", "description": "rent", "amount_cents": 1000},
-                {"timestamp": datetime.utcnow().isoformat(), "recipientAccountId": "acc3", "description": "groceries", "amount_cents": 5000}
-            ]
+            logger.warning("Failed to get transaction history: %s. Proceeding with empty history.", e)
         return []
 
     async def compute_risk(self, req: AnomalyCheckRequest, correlation_id: str) -> Tuple[float, List[str]]:
@@ -246,12 +237,10 @@ class AnomalyEngine:
         return float(risk_score), reasons
 
     async def persist_anomaly(self, req: AnomalyCheckRequest, risk_score: float, status: str, reasons: List[str]) -> str:
-        # transaction_id should be bigint from ledger-db
-        txn_id = req.metadata.get("transaction_id") if req.metadata else None
-        if txn_id is None:
-            raise ValueError("transaction_id (bigint) required in metadata for anomaly log")
+        # CORRECTED: transaction_id is not required here, it will be associated later.
+        # It should be nullable in the database schema for this to work perfectly.
         log = AnomalyLog(
-            transaction_id=int(txn_id),
+            transaction_id=None, # Set to None initially
             account_id=str(req.account_id),
             risk_score=risk_score,
             status=status,
@@ -293,47 +282,9 @@ class AnomalyEngine:
         await self.db.refresh(confirmation)
         return confirmation.confirmation_id
 
-    @staticmethod
-    async def send_alert(req: AnomalyCheckRequest, risk_score: float, reasons: List[str]) -> bool:
-        # Always use a new DB session for background tasks
-        async with AsyncSessionLocal() as session:
-            try:
-                profile_q = select(UserProfile).where(UserProfile.account_id == req.account_id)
-                r = await session.execute(profile_q)
-                profile = r.scalar_one_or_none()
-                if not profile or not profile.email_for_alerts:
-                    logger.info("No alert email configured for %s", req.account_id)
-                    return False
-
-                # Build email
-                import smtplib
-                from email.mime.text import MIMEText
-
-                body = (
-                    f"Suspicious transaction detected\n\n"
-                    f"Account: {req.account_id}\n"
-                    f"Amount: ${req.amount_cents/100:.2f}\n"
-                    f"Recipient: {req.recipient}\n"
-                    f"Risk score: {risk_score:.2f}\n\n"
-                    f"Reasons:\n - " + "\n - ".join(reasons) + "\n\n"
-                    f"To confirm, visit: {FRONTEND_URL}/confirm/{req.account_id}\n"
-                )
-                msg = MIMEText(body)
-                msg["Subject"] = "Bank-of-Anthos: Suspicious Transaction"
-                msg["From"] = SMTP_USERNAME or "no-reply@bankofanthos.local"
-                msg["To"] = profile.email_for_alerts
-
-                server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10)
-                server.starttls()
-                if SMTP_USERNAME and SMTP_PASSWORD:
-                    server.login(SMTP_USERNAME, SMTP_PASSWORD)
-                server.send_message(msg)
-                server.quit()
-                logger.info("Alert email sent to %s", profile.email_for_alerts)
-                return True
-            except Exception as e:
-                logger.exception("Failed to send alert: %s", e)
-                return False
+    # This method is now deprecated in favor of in-chat confirmations.
+    # It can be removed or kept for other potential confirmation methods.
+    pass
 
 # --- FastAPI app
 @asynccontextmanager
@@ -373,15 +324,13 @@ async def anomaly_check(
     # persist log
     log_id = await engine.persist_anomaly(request, risk_score, status, reasons)
 
-    confirmation_id = None
     confirmation_ttl = None
     if status == "suspicious":
         confirmation_id = await engine.create_pending_confirmation(request, risk_score, reasons, log_id)
         confirmation_ttl = CONFIRMATION_TTL_SECONDS
-        # send alert async (use static method)
-        asyncio.create_task(AnomalyEngine.send_alert(request, risk_score, reasons))
     elif status == "fraud":
-        asyncio.create_task(AnomalyEngine.send_alert(request, risk_score, reasons))
+        # The original send_alert is deprecated, but we could have other fraud actions here.
+        pass
 
     return AnomalyCheckResponse(
         status=status,
@@ -393,41 +342,50 @@ async def anomaly_check(
         log_id=str(log_id) if log_id else None,
     )
 
-@app.post("/v1/anomaly/confirm/{confirmation_id}", response_model=ConfirmationResponse)
-async def anomaly_confirm(confirmation_id: str, x_correlation_id: str = Header(..., alias="X-Correlation-ID"), db: AsyncSession = Depends(get_db_session)):
-    try:
-        q = select(PendingConfirmation).where(
-            and_(
-                PendingConfirmation.confirmation_id == confirmation_id,
-                PendingConfirmation.status == "pending",
-                PendingConfirmation.expires_at > datetime.utcnow()
-            )
+# This endpoint is no longer called by the Orchestrator in the new in-chat confirmation flow.
+# It is kept here for potential other uses (e.g., confirmation via email link).
+@app.post("/v1/anomaly/confirm/{confirmation_id}", response_model=ConfirmationResponse, deprecated=True)
+async def anomaly_confirm(confirmation_id: str, request: Request, x_correlation_id: str = Header(..., alias="X-Correlation-ID"), db: AsyncSession = Depends(get_db_session)):
+    q = select(PendingConfirmation).where(
+        and_(
+            PendingConfirmation.confirmation_id == uuid.UUID(confirmation_id),
+            PendingConfirmation.status == "pending",
+            PendingConfirmation.expires_at > datetime.utcnow()
         )
-        res = await db.execute(q)
-        pc = res.scalar_one_or_none()
-        if not pc:
-            return ConfirmationResponse(status="dummy", message="Dummy confirmation: not found or expired")
-        pc.status = "confirmed"
-        await db.commit()
+    )
+    res = await db.execute(q)
+    pc = res.scalar_one_or_none()
+    if not pc:
+        raise HTTPException(status_code=404, detail="Confirmation not found, has expired, or has already been used.")
+    
+    pc.status = "confirmed"
+    await db.commit()
 
-        # Send transaction details to orchestrator/transaction-sage
-        try:
-            transaction_payload = json.loads(pc.payload)
-            # You may need to set the orchestrator/transaction-sage URL via env/config
-            TRANSACTION_SAGE_URL = os.getenv("TRANSACTION_SAGE_URL", "http://localhost:8082/v1/transactions/execute")
-            headers = {"X-Correlation-ID": x_correlation_id}
-            async with httpx.AsyncClient(timeout=20.0) as client:
-                resp = await client.post(TRANSACTION_SAGE_URL, json=transaction_payload, headers=headers)
-                if resp.status_code in (200, 201):
-                    logger.info(f"Transaction forwarded to transaction-sage: {resp.json()}")
-                else:
-                    logger.warning(f"Failed to forward transaction: {resp.status_code} {resp.text}")
-        except Exception as e:
-            logger.exception(f"Error forwarding transaction after confirmation: {e}")
+    # Build the correct payload for transaction-sage
+    original_request = pc.payload
+    transaction_payload = {
+        "account_id": original_request.get("account_id"),
+        "amount_cents": original_request.get("amount_cents"),
+        "recipient_account_id": original_request.get("recipient_account_id"),
+        "description": original_request.get("description"),
+        "metadata": original_request.get("metadata", {})
+    }
+    
+    # Forward the request to Transaction-Sage
+    headers = {"X-Correlation-ID": x_correlation_id}
+    auth_header = request.headers.get("Authorization")
+    if auth_header:
+        headers["Authorization"] = auth_header
 
-        return ConfirmationResponse(status="confirmed", message="Transaction confirmed and forwarded for execution")
-    except HTTPException:
-        raise
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(f"{TRANSACTION_SAGE_URL}/v1/transactions/execute", json=transaction_payload, headers=headers)
+            resp.raise_for_status()
+            logger.info(f"Transaction forwarded to transaction-sage: {resp.json()}")
+            return ConfirmationResponse(status="confirmed", message="Transaction confirmed and forwarded for execution")
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Failed to forward transaction to transaction-sage: {e.response.text}")
+        raise HTTPException(status_code=502, detail="Transaction confirmed, but failed to forward to execution service.")
     except Exception as e:
-        logger.exception("confirm error: %s", e)
-        raise HTTPException(status_code=500, detail="internal error")
+        logger.exception(f"Error forwarding transaction after confirmation: {e}")
+        raise HTTPException(status_code=500, detail="Internal error while forwarding transaction.")

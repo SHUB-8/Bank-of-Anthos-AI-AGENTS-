@@ -5,5 +5,5 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y gcc libpq-dev
 
 COPY . .
-RUN pip install --no-cache-dir --timeout=100 --retries=5 -r requirements.txt
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8082"]
+RUN pip install --no-cache-dir -r requirements.txt
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8084"]
