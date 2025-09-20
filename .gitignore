@@ -38,6 +38,8 @@ sdist/
 var/
 wheels/
 pip-wheel-metadata/
+*.env
+*.env.example
 share/python-wheels/
 *.egg-info/
 .installed.cfg

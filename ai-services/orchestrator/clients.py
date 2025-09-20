@@ -1,9 +1,9 @@
 
+
 import os
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from typing import Dict, Any, Optional, List
-from dotenv import load_dotenv
 from middleware import get_logger
 from schemas import (
     AnomalyCheckRequest, AnomalyCheckResponse,
@@ -11,10 +11,9 @@ from schemas import (
     ContactResolveRequest, ContactResolveResponse
 )
 
-load_dotenv()
-
-HTTP_TIMEOUT = int(os.getenv("HTTP_TIMEOUT_SECONDS", 10))
-HTTP_RETRY_ATTEMPTS = int(os.getenv("HTTP_RETRY_ATTEMPTS", 3))
+# All config is loaded from Kubernetes manifests secrets only
+HTTP_TIMEOUT = int(os.environ.get("HTTP_TIMEOUT_SECONDS", 10))
+HTTP_RETRY_ATTEMPTS = int(os.environ.get("HTTP_RETRY_ATTEMPTS", 3))
 
 # --- Base Client with Retries ---
 
@@ -51,7 +50,7 @@ class BaseClient:
 
 class AnomalySageClient(BaseClient):
     def __init__(self):
-        super().__init__(os.getenv("ANOMALY_SAGE_URL"), "Anomaly-Sage")
+        super().__init__(os.environ["ANOMALY_SAGE_URL"], "Anomaly-Sage")
 
     async def check_risk(self, request: AnomalyCheckRequest, correlation_id: str, token: str) -> AnomalyCheckResponse:
         headers = self._get_headers(correlation_id, token)
@@ -64,7 +63,7 @@ class AnomalySageClient(BaseClient):
 
 class TransactionSageClient(BaseClient):
     def __init__(self):
-        super().__init__(os.getenv("TRANSACTION_SAGE_URL"), "Transaction-Sage")
+        super().__init__(os.environ["TRANSACTION_SAGE_URL"], "Transaction-Sage")
 
     async def execute_transaction(self, request: TransactionExecuteRequest, correlation_id: str, idempotency_key: str, token: str) -> TransactionExecuteResponse:
         headers = self._get_headers(correlation_id, token, idempotency_key)
@@ -73,7 +72,7 @@ class TransactionSageClient(BaseClient):
 
 class ContactSageClient(BaseClient):
     def __init__(self):
-        super().__init__(os.getenv("CONTACT_SAGE_URL"), "Contact-Sage")
+        super().__init__(os.environ["CONTACT_SAGE_URL"], "Contact-Sage")
 
     async def resolve_contact(self, request: ContactResolveRequest, correlation_id: str, token: str) -> ContactResolveResponse:
         headers = self._get_headers(correlation_id, token)
@@ -90,7 +89,7 @@ class ContactSageClient(BaseClient):
 
 class MoneySageClient(BaseClient):
     def __init__(self):
-        super().__init__(os.getenv("MONEY_SAGE_URL"), "Money-Sage")
+        super().__init__(os.environ["MONEY_SAGE_URL"], "Money-Sage")
 
     async def get_balance(self, account_id: str, correlation_id: str, token: str) -> Dict[str, Any]:
         headers = self._get_headers(correlation_id, token)

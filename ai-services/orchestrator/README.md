@@ -23,14 +23,10 @@ It **NEVER** writes to tables owned by other services, such as `anomaly_logs` or
 
 ## Running the Service
 
-### 1. Environment Variables
 
-Create a `.env` file in the `orchestrator` directory by copying the `.env.example` file. Populate it with the correct values for your environment.
+### 1. Configuration
 
-```bash
-cp .env.example .env
-# Edit .env with your configuration
-```
+All configuration (service URLs, DB URIs, keys, API secrets) is now loaded from Kubernetes manifests and secrets only. There are no `.env` or environment variable files required. See the `orchestrator.yaml` manifest and referenced Kubernetes secrets for deployment details.
 
 ### 2. Database Migrations
 

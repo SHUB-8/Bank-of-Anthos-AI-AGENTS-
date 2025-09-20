@@ -39,11 +39,11 @@ logger = logging.getLogger("anomaly-sage")
 # Use shared JWT authentication
 from auth import get_current_user_claims
 
-# --- Config from env
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@ai-meta-db:5432/ai_meta_db")
-TRANSACTION_HISTORY_URL = os.getenv("TRANSACTION_HISTORY_URL", "http://transactionhistory:8086")
-TRANSACTION_SAGE_URL = os.getenv("TRANSACTION_SAGE_URL", "http://transaction-sage:8082")
-CONFIRMATION_TTL_SECONDS = int(os.getenv("CONFIRMATION_TTL_SECONDS", "3600"))  # 1 hour
+# --- Config from Kubernetes manifests secrets only
+DATABASE_URL = os.environ["DATABASE_URL"]
+TRANSACTION_HISTORY_URL = os.environ["TRANSACTION_HISTORY_URL"]
+TRANSACTION_SAGE_URL = os.environ["TRANSACTION_SAGE_URL"]
+CONFIRMATION_TTL_SECONDS = int(os.environ.get("CONFIRMATION_TTL_SECONDS", "3600"))  # 1 hour
 
 # --- Database setup
 engine = create_async_engine(DATABASE_URL, echo=False)

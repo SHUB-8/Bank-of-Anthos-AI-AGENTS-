@@ -38,9 +38,9 @@ logger = logging.getLogger("transaction-sage")
 # Use shared JWT authentication
 from auth import get_current_user_claims
 
-# --- Config
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@ai-meta-db:5432/ai_meta_db")
-LEDGER_WRITER_URL = os.getenv("LEDGER_WRITER_URL", "http://ledgerwriter:8088")
+# --- Config (from Kubernetes manifests secrets only)
+DATABASE_URL = os.environ["DATABASE_URL"]
+LEDGER_WRITER_URL = os.environ["LEDGER_WRITER_URL"]
 
 
 # --- DB setup
@@ -225,7 +225,7 @@ async def execute_transaction(
             await db.refresh(key_row)
 
     # Get routing number from environment, with a fallback for safety.
-    local_routing_num = os.getenv("LOCAL_ROUTING_NUM", "123456789")
+    local_routing_num = os.environ.get("LOCAL_ROUTING_NUM", "123456789")
 
     # Only transfer supported
     ledger_payload = {
