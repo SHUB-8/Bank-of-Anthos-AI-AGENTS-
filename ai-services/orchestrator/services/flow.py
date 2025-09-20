@@ -1,5 +1,4 @@
 from currency_utils import normalize_currency, convert_amount
-# GENERATED: Orchestrator - produced by Gemini CLI. Do not include mock or dummy data in production code.
 
 import json
 import os

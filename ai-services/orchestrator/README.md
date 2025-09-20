@@ -1,4 +1,3 @@
-# GENERATED: Orchestrator - produced by Gemini CLI. Do not include mock or dummy data in production code.
 
 # Orchestrator Microservice
 
