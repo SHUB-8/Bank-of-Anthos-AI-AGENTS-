@@ -6,7 +6,7 @@ import os
 import httpx
 from fastapi import FastAPI, HTTPException, Header, Depends
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, AsyncGenerator
 from datetime import datetime, date, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
@@ -15,9 +15,16 @@ from sqlalchemy.dialects.postgresql import UUID
 import uuid
 from dotenv import load_dotenv
 
+# Use shared JWT authentication
 from auth import get_current_user_claims
 
 load_dotenv()
+
+# --- FastAPI app
+app = FastAPI(title="Money-Sage", version="1.0.0")
+
+# --- HTTPx client
+client = httpx.AsyncClient()
 
 # --- Config
 BALANCE_READER_URL = os.getenv("BALANCE_READER_URL", "http://balancereader:8080")
@@ -26,7 +33,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@ai-
 
 # --- DB setup
 engine = create_async_engine(DATABASE_URL, echo=False)
-AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
 class Base(DeclarativeBase):
     pass
@@ -62,15 +69,64 @@ class BudgetModel(BaseModel):
     period_start: date
     period_end: Optional[date] = None
 
-# --- FastAPI app
-app = FastAPI(title="Money-Sage", version="1.0.0")
+# --- Deposit Model
+class DepositRequest(BaseModel):
+    account_id: str
+    amount: int
+    from_account_num: str
+    from_routing_num: str
+    uuid: str
 
-# --- HTTPx client
-client = httpx.AsyncClient()
-
-async def get_db_session() -> AsyncSession:
-    async with AsyncSessionLocal() as session:
+async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
+    async with async_session_factory() as session:
         yield session
+
+# --- Deposit Endpoint
+@app.post("/v1/deposit")
+async def deposit(request: DepositRequest, db: AsyncSession = Depends(get_db_session), claims: Dict[str, Any] = Depends(get_current_user_claims)):
+    deposit_log = TransactionLog(
+        transaction_id=int(request.uuid[:8], 16),  # Use part of uuid for demo
+        account_id=request.account_id,
+        amount=request.amount,
+        category="deposit",
+        created_at=datetime.utcnow()
+    )
+    db.add(deposit_log)
+    await db.commit()
+    await db.refresh(deposit_log)
+    return {"status": "success", "message": "Deposit successful", "transaction_id": str(deposit_log.id)}
+
+class Deposit(BaseModel):
+    amount: int
+
+@app.post("/v1/deposit/{account_id}")
+async def deposit_to_account(account_id: str, deposit: Deposit, claims: Dict[str, Any] = Depends(get_current_user_claims), authorization: Optional[str] = Header(None)):
+    headers = {"Authorization": authorization} if authorization else {}
+    
+    transaction_sage_url = os.getenv('TRANSACTION_SAGE_URL')
+    
+    # Ensure the URL has a protocol prefix
+    if transaction_sage_url and not transaction_sage_url.startswith(('http://', 'https://')):
+        transaction_sage_url = f"http://{transaction_sage_url}"
+    
+    if not transaction_sage_url:
+        raise HTTPException(status_code=500, detail="TRANSACTION_SAGE_URL environment variable not set")
+    
+    try:
+        # Forward the request to transaction-sage
+        payload = {
+            "account_id": account_id,
+            "amount": deposit["amount"],
+            "transaction_type": "deposit",
+            "metadata": {"source": "money-sage"}
+        }
+        resp = await client.post(f"{transaction_sage_url}/v1/transactions/execute", json=payload, headers=headers)
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/v1/health")
 async def health():

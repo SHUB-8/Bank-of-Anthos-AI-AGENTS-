@@ -23,12 +23,20 @@ async def get_intent_from_llm(prompt: str, correlation_id: str) -> LLMIntentEnve
     logger = get_logger(correlation_id)
     logger.info("Sending prompt to Gemini for intent parsing.")
 
+    # Create a schema for the LLM call that does not include the raw_llm field,
+    # as this is added by our service after the fact.
+    # We need to do a deep copy to avoid modifying the original schema
+    import copy
+    api_schema = copy.deepcopy(JSON_SCHEMA_LLM)
+    if "raw_llm" in api_schema.get("properties", {}):
+        del api_schema["properties"]["raw_llm"]
+
     try:
         model = genai.GenerativeModel(
             GADK_MODEL,
             generation_config=genai.GenerationConfig(
                 response_mime_type="application/json",
-                response_schema=JSON_SCHEMA_LLM
+                response_schema=api_schema
             )
         )
         response = await model.generate_content_async(prompt)

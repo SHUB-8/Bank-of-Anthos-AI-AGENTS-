@@ -1,0 +1,55 @@
+# contact-sage.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: contact-sage
+spec:
+  selector:
+    app: contact-sage
+  ports:
+    - protocol: TCP
+      port: 8083
+      targetPort: 8083
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: contact-sage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: contact-sage
+  template:
+    metadata:
+      labels:
+        app: contact-sage
+    spec:
+      containers:
+      - name: contact-sage
+        image: contact-sage:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8083
+        env:
+        - name: JWT_PUBLIC_KEY
+          valueFrom:
+            secretKeyRef:
+              name: jwt-key-secret
+              key: public-key.pem
+        - name: ACCOUNTS_DB_URI
+          value: "postgresql://accounts-admin:accounts-pwd@accounts-db:5432/accounts-db"
+        - name: CONTACTS_SERVICE_URL
+          value: "http://contacts:8080"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8083
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8083
+          initialDelaySeconds: 10
+          periodSeconds: 10

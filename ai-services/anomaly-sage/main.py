@@ -32,9 +32,12 @@ from sqlalchemy.dialects.postgresql import UUID, NUMERIC
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
-# --- Logging
+import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("anomaly-sage")
+
+# Use shared JWT authentication
+from auth import get_current_user_claims
 
 # --- Config from env
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@ai-meta-db:5432/ai_meta_db")
@@ -44,7 +47,7 @@ CONFIRMATION_TTL_SECONDS = int(os.getenv("CONFIRMATION_TTL_SECONDS", "3600"))  #
 
 # --- Database setup
 engine = create_async_engine(DATABASE_URL, echo=False)
-AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
 class Base(DeclarativeBase):
     pass
@@ -141,7 +144,7 @@ def parse_iso(dt_str: str) -> Optional[datetime]:
 
 from typing import AsyncGenerator
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
-    async with AsyncSessionLocal() as session:
+    async with async_session_factory() as session:
         yield session
 
 # --- Risk calculation logic encapsulated
@@ -305,6 +308,7 @@ async def anomaly_check(
     request: AnomalyCheckRequest,
     x_correlation_id: str = Header(..., alias="X-Correlation-ID"),
     db: AsyncSession = Depends(get_db_session),
+    claims: Dict[str, Any] = Depends(get_current_user_claims)
 ):
     engine = AnomalyEngine(db)
     # compute risk
@@ -345,7 +349,7 @@ async def anomaly_check(
 # This endpoint is no longer called by the Orchestrator in the new in-chat confirmation flow.
 # It is kept here for potential other uses (e.g., confirmation via email link).
 @app.post("/v1/anomaly/confirm/{confirmation_id}", response_model=ConfirmationResponse, deprecated=True)
-async def anomaly_confirm(confirmation_id: str, request: Request, x_correlation_id: str = Header(..., alias="X-Correlation-ID"), db: AsyncSession = Depends(get_db_session)):
+async def anomaly_confirm(confirmation_id: str, request: Request, x_correlation_id: str = Header(..., alias="X-Correlation-ID"), db: AsyncSession = Depends(get_db_session), claims: Dict[str, Any] = Depends(get_current_user_claims)):
     q = select(PendingConfirmation).where(
         and_(
             PendingConfirmation.confirmation_id == uuid.UUID(confirmation_id),

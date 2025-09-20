@@ -105,5 +105,17 @@ spec:
       serviceAccount: bank-of-anthos
       serviceAccountName: default
       volumes:
-        - emptyDir: {}
-          name: postgresdb
+        - name: postgresdb
+          persistentVolumeClaim:
+            claimName: accounts-db-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: accounts-db-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

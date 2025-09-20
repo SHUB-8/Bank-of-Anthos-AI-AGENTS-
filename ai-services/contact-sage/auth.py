@@ -1,69 +1,34 @@
-# GENERATED: Orchestrator - produced by Gemini CLI. Do not include mock or dummy data in production code.
+﻿# auth.py
+"""
+Reusable JWT Authentication Module for FastAPI
 
+This module provides a dependency for FastAPI endpoints to enforce JWT-based
+authentication. It decodes and validates a Bearer token using a public key.
+"""
 import os
-import base64
+from typing import Dict, Any, Optional
 import jwt
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
-from typing import Dict
-from middleware import get_logger
+from fastapi import Depends, HTTPException, Header
 
-# This dependency will extract the token from the Authorization header
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token") 
+# The RS256 public key is loaded directly from an environment variable.
+PUBLIC_KEY = os.getenv("JWT_PUBLIC_KEY")
+if not PUBLIC_KEY:
+    raise RuntimeError("FATAL: JWT_PUBLIC_KEY environment variable not set.")
 
-# Load the public key from file
-try:
-    with open(os.getenv("JWT_PUBLIC_KEY_PATH"), "r") as f:
-        PUBLIC_KEY = f.read()
-except (IOError, TypeError):
-    # Fallback for environments where the key is passed directly
-    PUBLIC_KEY = os.getenv("JWT_PUBLIC_KEY")
-
-ALGORITHM = os.getenv("ALGORITHM", "RS256")
-
-
-
-async def get_current_user_claims(token: str = Depends(oauth2_scheme)) -> Dict[str, any]:
+def get_current_user_claims(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
     """
-    A FastAPI dependency that validates the JWT locally using the public key
-    and returns the decoded token claims.
-    
-    This is the single source of truth for user identity.
+    FastAPI dependency to validate a JWT and extract its claims.
     """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing or invalid 'Authorization: Bearer <token>' header."
+        )
+
+    token = authorization.split(" ", 1)[1]
+
     try:
-        # PyJWT will verify the signature and expiration date
-        payload = jwt.decode(
-            token, 
-            JWT_PUBLIC_KEY, 
-            algorithms=["RS256"], 
-            options={"verify_aud": False} # Audience verification can be added if needed
-        )
-        
-        account_id: str = payload.get("acct")
-        username: str = payload.get("user")
-
-        if account_id is None or username is None:
-             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Invalid token: missing required claims (acct, user)",
-            )
-        
-        # Return a dictionary with the essential claims
-        return {"account_id": account_id, "username": username}
-
-    except jwt.ExpiredSignatureError:
-        logger = get_logger()
-        logger.warning("JWT validation failed: Token has expired")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has expired",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    except jwt.PyJWTError as e:
-        logger = get_logger()
-        logger.error(f"JWT validation failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Could not validate credentials: {e}",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        claims = jwt.decode(token, key=PUBLIC_KEY, algorithms=["RS256"])
+        return claims
+    except jwt.exceptions.InvalidTokenError as err:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {err}")

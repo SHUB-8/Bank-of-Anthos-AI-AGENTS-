@@ -1,3 +1,4 @@
+from currency_utils import normalize_currency, convert_amount
 # GENERATED: Orchestrator - produced by Gemini CLI. Do not include mock or dummy data in production code.
 
 import json
@@ -13,6 +14,7 @@ from schemas import (
 )
 from adk_adapter import get_intent_from_llm
 from services.entity_resolver import resolve_entities
+from currency_utils import normalize_currency
 from clients import (
     anomaly_sage_client, transaction_sage_client, contact_sage_client, 
     money_sage_client, exchange_rate_client
@@ -76,11 +78,93 @@ async def process_query(request: QueryRequest, account_id: str, username: str, t
     intent = resolved_envelope.intent
     entities = resolved_envelope.entities
 
+
     if intent == "transfer":
         if not entities.amount or not entities.amount.value:
             return ClarifyResponse(message="To make a transfer, I need an amount. How much would you like to send?")
         if not entities.recipient_account_id:
             return ClarifyResponse(message="To make a transfer, I need a recipient. Who would you like to send money to?")
+
+        amount_cents = int(entities.amount.value * 100)
+        # --- Currency Conversion ---
+        if entities.amount.currency and entities.amount.currency.upper() != "USD":
+            exchange_url = os.getenv("EXCHANGE_RATE_URL")
+            api_key = os.getenv("EXCHANGE_RATE_API_KEY")
+            source_currency = normalize_currency(entities.amount.currency)
+            logger.info(f"[Currency Debug] Normalized currency for API: {source_currency}")
+            if not exchange_url or not api_key:
+                return QueryResponse(status="error", message="Currency conversion service is not configured.")
+            logger.info(f"Performing currency conversion from {source_currency} to USD using ExchangeRate API URL: {exchange_url}/{api_key}/latest/{source_currency}")
+            rates_data = await exchange_rate_client.get_usd_conversion_rates(exchange_url, api_key, source_currency, correlation_id)
+            rate = rates_data.get("conversion_rates", {}).get("USD")
+            if not rate:
+                logger.error(f"[Currency Debug] ExchangeRate API did not return a rate for {source_currency} to USD.")
+                return QueryResponse(status="error", message=f"I couldn't find an exchange rate from {source_currency} to USD.")
+            amount_cents = int(entities.amount.value * rate * 100)
+
+        anomaly_req = AnomalyCheckRequest(
+            account_id=account_id,
+            amount_cents=amount_cents,
+            transaction_type="transfer",
+            recipient_account_id=entities.recipient_account_id,
+            description=entities.description,
+            timestamp=datetime.utcnow().isoformat(),
+            metadata={"envelope_id": str(envelope_id), "session_id": request.session_id}
+        )
+        anomaly_res = await anomaly_sage_client.check_risk(anomaly_req, correlation_id, token)
+        correlation = EnvelopeCorrelation(envelope_id=envelope_id, anomaly_log_id=anomaly_res.log_id)
+        db.add(correlation)
+        await db.commit()
+        if anomaly_res.status == "fraud":
+            return QueryResponse(status="blocked", message="This transaction has been blocked due to suspected fraud.")
+        if anomaly_res.status == "suspicious":
+            logger.info(f"Suspicious transaction. Storing context for session {request.session_id} and awaiting user confirmation.")
+            execution_payload = {
+                "account_id": account_id,
+                "amount_cents": amount_cents,
+                "recipient_account_id": entities.recipient_account_id,
+                "description": entities.description,
+                "metadata": {"envelope_id": str(envelope_id)}
+            }
+            pending_confirmation = AgentMemory(
+                session_id=request.session_id,
+                key='pending_confirmation',
+                value=execution_payload,
+                expires_at=datetime.utcnow() + timedelta(seconds=60)
+            )
+            db.add(pending_confirmation)
+            await db.commit()
+            return QueryResponse(status="confirmation_required", message="This transaction seems unusual. To protect your account, please confirm by replying 'yes'.")
+        if anomaly_res.status == "normal":
+            if not idempotency_key:
+                return QueryResponse(status="error", message="An idempotency key is required for this transaction to prevent duplicate charges.", retryable=False)
+            transaction_req = TransactionExecuteRequest(
+                account_id=account_id,
+                amount=amount_cents,
+                transaction_type="transfer",
+                recipient_account_id=entities.recipient_account_id,
+                metadata={"envelope_id": str(envelope_id)}
+            )
+            transaction_res = await transaction_sage_client.execute_transaction(transaction_req, correlation_id, idempotency_key, token)
+            correlation.transaction_id = transaction_res.transaction_id
+            db.add(correlation)
+            await db.commit()
+            return QueryResponse(status="success", message=transaction_res.message, transaction_id=transaction_res.transaction_id)
+
+        # --- Deposit Flow ---
+        elif intent == "deposit":
+            logger.info("Calling Money-Sage for deposit.")
+            deposit_payload = {
+                "amount": amount_cents,
+                "metadata": {"envelope_id": str(envelope_id)}
+            }
+            deposit_res = await money_sage_client.deposit(account_id, deposit_payload, correlation_id, token)
+            return QueryResponse(status="success", message="Deposit successful.", data=deposit_res)
+
+    elif intent == "deposit":
+        logger.info("Calling Money-Sage for deposit.")
+        if not entities.amount or not entities.amount.value:
+            return ClarifyResponse(message="I need an amount to make a deposit.")
 
         amount_cents = int(entities.amount.value * 100)
 
@@ -91,78 +175,23 @@ async def process_query(request: QueryRequest, account_id: str, username: str, t
             if not exchange_url or not api_key:
                 return QueryResponse(status="error", message="Currency conversion service is not configured.")
             
-            logger.info(f"Performing currency conversion from {entities.amount.currency.upper()} to USD")
-            rates_data = await exchange_rate_client.get_usd_conversion_rates(exchange_url, api_key, correlation_id)
-            rate = rates_data.get("rates", {}).get(entities.amount.currency.upper())
+            source_currency = normalize_currency(entities.amount.currency)
+            logger.info(f"[Currency Debug] Normalized currency for API: {source_currency}")
+            
+            logger.info(f"Performing currency conversion from {source_currency} to USD using ExchangeRate API URL: {exchange_url}/{api_key}/latest/{source_currency}")
+            rates_data = await exchange_rate_client.get_usd_conversion_rates(exchange_url, api_key, source_currency, correlation_id)
+            rate = rates_data.get("conversion_rates", {}).get("USD")
             if not rate:
-                return QueryResponse(status="error", message=f"I couldn't find an exchange rate for {entities.amount.currency.upper()}.")
+                return QueryResponse(status="error", message=f"I couldn't find an exchange rate for {source_currency}.")
             
             amount_cents = int(entities.amount.value * rate * 100)
 
-        anomaly_req = AnomalyCheckRequest(
-            account_id=account_id,
-            amount_cents=amount_cents,
-            transaction_type="transfer",
-            recipient_account_id=entities.recipient_account_id,
-            description=entities.description,
-            metadata={"envelope_id": str(envelope_id), "session_id": request.session_id}
-        )
-
-        anomaly_res = await anomaly_sage_client.check_risk(anomaly_req, correlation_id, token)
-
-        correlation = EnvelopeCorrelation(envelope_id=envelope_id, anomaly_log_id=anomaly_res.log_id)
-        db.add(correlation)
-        await db.commit()
-
-        if anomaly_res.status == "fraud":
-            return QueryResponse(status="blocked", message="This transaction has been blocked due to suspected fraud.")
-
-        if anomaly_res.status == "suspicious":
-            logger.info(f"Suspicious transaction. Storing context for session {request.session_id} and awaiting user confirmation.")
-            # The payload to execute if the user confirms
-            execution_payload = {
-                "account_id": account_id,
-                "amount_cents": amount_cents,
-                "recipient_account_id": entities.recipient_account_id,
-                "description": entities.description,
-                "metadata": {"envelope_id": str(envelope_id)}
-            }
-            # Save the payload to agent memory for this session
-            pending_confirmation = AgentMemory(
-                session_id=request.session_id,
-                key='pending_confirmation',
-                value=execution_payload,
-                expires_at=datetime.utcnow() + timedelta(seconds=60) # Short expiry for in-chat confirmation
-            )
-            db.add(pending_confirmation)
-            await db.commit()
-            
-            return QueryResponse(status="confirmation_required", message="This transaction seems unusual. To protect your account, please confirm by replying 'yes'.")
-
-        if anomaly_res.status == "normal":
-            if not idempotency_key:
-                return QueryResponse(status="error", message="An idempotency key is required for this transaction to prevent duplicate charges.", retryable=False)
-
-            transaction_req = TransactionExecuteRequest(
-                account_id=account_id,
-                amount_cents=amount_cents,
-                transaction_type="transfer",
-                recipient_account_id=entities.recipient_account_id,
-                description=entities.description,
-                metadata={"envelope_id": str(envelope_id)}
-            )
-            transaction_res = await transaction_sage_client.execute_transaction(transaction_req, correlation_id, idempotency_key, token)
-
-            correlation.transaction_id = transaction_res.transaction_id
-            db.add(correlation)
-            await db.commit()
-
-            return QueryResponse(status="success", message=transaction_res.message, transaction_id=transaction_res.transaction_id)
-
-    elif intent == "balance":
-        logger.info("Calling Money-Sage for balance inquiry.")
-        balance_data = await money_sage_client.get_balance(account_id, correlation_id, token)
-        return QueryResponse(status="success", message="Here is your account balance.", data=balance_data)
+        deposit_payload = {
+            "amount": amount_cents,
+            "metadata": {"envelope_id": str(envelope_id)}
+        }
+        deposit_res = await money_sage_client.deposit(account_id, deposit_payload, correlation_id, token)
+        return QueryResponse(status="success", message="Deposit successful.", data=deposit_res)
 
     elif intent == "transaction_history":
         logger.info("Calling Money-Sage for transaction history.")

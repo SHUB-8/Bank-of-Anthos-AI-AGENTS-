@@ -1,6 +1,7 @@
 # GENERATED: Orchestrator - produced by Gemini CLI. Do not include mock or dummy data in production code.
 
 import uuid
+from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List, Dict, Any, Literal, Annotated
 import json
@@ -100,8 +101,8 @@ class AnomalyCheckRequest(BaseModel):
     amount_cents: int
     transaction_type: Literal["transfer", "deposit"]
     recipient_account_id: Optional[str] = None
-    recipient_name: Optional[str] = None
     description: Optional[str] = None
+    timestamp: Optional[datetime] = None
     metadata: Dict[str, Any]
 
 class AnomalyCheckResponse(BaseModel):
@@ -115,10 +116,9 @@ class AnomalyCheckResponse(BaseModel):
 # Transaction-Sage
 class TransactionExecuteRequest(BaseModel):
     account_id: str
-    amount_cents: int
+    amount: int
     transaction_type: Literal["transfer", "deposit"]
     recipient_account_id: Optional[str] = None
-    description: Optional[str] = None
     metadata: Dict[str, Any]
 
 class TransactionExecuteResponse(BaseModel):
@@ -136,8 +136,7 @@ class Contact(BaseModel):
 
 class ContactResolveRequest(BaseModel):
     recipient: str
-    fuzzy_match: bool = True
-    username: str
+    account_id: str
 
 class ContactResolveResponse(BaseModel):
     status: str

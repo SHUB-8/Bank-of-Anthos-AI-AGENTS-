@@ -1,8 +1,6 @@
-# GENERATED: Orchestrator - produced by Gemini CLI. Do not include mock or dummy data in production code.
-
 import os
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
+from typing import AsyncGenerator
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -13,13 +11,10 @@ if not DATABASE_URL:
 
 engine = create_async_engine(DATABASE_URL, echo=False)
 
-AsyncSessionLocal = sessionmaker(
-    bind=engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-)
+# Use modern async_sessionmaker
+async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
-async def get_db_session() -> AsyncSession:
-    """FastAPI dependency to get a DB session."""
-    async with AsyncSessionLocal() as session:
+async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
+    """FastAPI dependency to get a DB session, using the correct modern pattern."""
+    async with async_session_factory() as session:
         yield session

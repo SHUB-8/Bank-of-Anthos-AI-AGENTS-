@@ -28,7 +28,8 @@ class BaseClient:
     def _get_headers(self, correlation_id: str, token: str, idempotency_key: Optional[str] = None) -> Dict[str, str]:
         headers = {
             "X-Correlation-ID": correlation_id,
-            "Authorization": f"Bearer {token}"
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
         }
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
@@ -112,14 +113,18 @@ class MoneySageClient(BaseClient):
         headers = self._get_headers(correlation_id, token)
         return await self._request("POST", f"/v1/budgets/{account_id}", headers, json=budget)
 
+    async def deposit(self, account_id: str, deposit: Dict, correlation_id: str, token: str) -> Dict:
+        headers = self._get_headers(correlation_id, token)
+        return await self._request("POST", f"/v1/deposit/{account_id}", headers, json=deposit)
+
 class ExchangeRateClient(BaseClient):
     def __init__(self):
         super().__init__("", "Exchange-Rate-Service")
     
-    async def get_usd_conversion_rates(self, base_url: str, api_key: str, correlation_id: str) -> Dict[str, Any]:
+    async def get_usd_conversion_rates(self, base_url: str, api_key: str, source_currency: str, correlation_id: str) -> Dict[str, Any]:
         headers = {"X-Correlation-ID": correlation_id}
-        # The API key is added as a path parameter for this specific API
-        url_with_key = f"{base_url}/{api_key}/latest/USD"
+        # The API key and source currency are added as path parameters for this specific API
+        url_with_key = f"{base_url}/{api_key}/latest/{source_currency}"
         return await self._request("GET", url_with_key, headers)
 
 # Instantiate clients for use in services

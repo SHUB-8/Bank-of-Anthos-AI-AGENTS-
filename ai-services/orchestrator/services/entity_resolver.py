@@ -21,7 +21,7 @@ async def resolve_entities(envelope: LLMIntentEnvelope, account_id: str, usernam
 
         resolve_request = ContactResolveRequest(
             recipient=envelope.entities.recipient_name,
-            username=username
+            account_id=account_id
         )
         
         try:

@@ -21,7 +21,7 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Literal
 
 import httpx
 from fastapi import FastAPI, Depends, Header, HTTPException, Request
@@ -31,9 +31,12 @@ from sqlalchemy.dialects.postgresql import UUID, ARRAY, NUMERIC
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
-# --- Logging
+import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("transaction-sage")
+
+# Use shared JWT authentication
+from auth import get_current_user_claims
 
 # --- Config
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@ai-meta-db:5432/ai_meta_db")
@@ -42,7 +45,7 @@ LEDGER_WRITER_URL = os.getenv("LEDGER_WRITER_URL", "http://ledgerwriter:8088")
 
 # --- DB setup
 engine = create_async_engine(DATABASE_URL, echo=False)
-AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
 class Base(DeclarativeBase):
     pass
@@ -91,9 +94,9 @@ class IdempotencyKey(Base):
 # --- Pydantic models
 class TransactionExecuteRequest(BaseModel):
     account_id: str
-    amount_cents: int
-    recipient_account_id: str
-    description: Optional[str] = None
+    amount: int
+    transaction_type: Literal["transfer"]
+    recipient_account_id: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 class TransactionExecuteResponse(BaseModel):
@@ -153,11 +156,8 @@ def categorize(description: Optional[str]) -> str:
 # --- Helpers
 from typing import AsyncGenerator
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
-    async with AsyncSessionLocal() as s:
-        try:
-            yield s
-        finally:
-            await s.close()
+    async with async_session_factory() as session:
+        yield session
 
 def period_bounds_for(date: datetime, periodicity: str = "monthly") -> tuple[datetime, datetime]:
     if periodicity == "monthly":
@@ -191,14 +191,16 @@ async def execute_transaction(
     req: TransactionExecuteRequest,
     request: Request,
     x_correlation_id: str = Header(..., alias="X-Correlation-ID"),
-    authorization: Optional[str] = Header(None, alias="Authorization"),
     db: AsyncSession = Depends(get_db_session),
+    claims: Dict[str, Any] = Depends(get_current_user_claims)
 ):
     # Validate basic fields
-    if req.amount_cents <= 0:
+    if req.amount <= 0:
         raise HTTPException(status_code=400, detail="amount must be positive")
+    if req.transaction_type != "transfer":
+        raise HTTPException(status_code=400, detail="Only 'transfer' transaction_type is supported")
     if not req.recipient_account_id:
-        raise HTTPException(status_code=400, detail="recipient_account_id is required")
+        raise HTTPException(status_code=400, detail="recipient_account_id is required for transfers")
 
     idempotency_key = request.headers.get("Idempotency-Key")
     # Basic idempotency handling
@@ -222,12 +224,16 @@ async def execute_transaction(
             await db.commit()
             await db.refresh(key_row)
 
-    # Prepare ledger payload
+    # Get routing number from environment, with a fallback for safety.
+    local_routing_num = os.getenv("LOCAL_ROUTING_NUM", "123456789")
+
+    # Only transfer supported
     ledger_payload = {
-        "fromAccountId": req.account_id,
-        "toAccountId": req.recipient_account_id,
-        "amount": req.amount_cents / 100.0, # Convert cents to dollars for ledger
-        "description": req.description or ""
+        "fromAccountNum": req.account_id,
+        "fromRoutingNum": local_routing_num,
+        "toAccountNum": req.recipient_account_id,
+        "toRoutingNum": local_routing_num,
+        "amount": req.amount
     }
 
     headers = {"X-Correlation-ID": x_correlation_id}

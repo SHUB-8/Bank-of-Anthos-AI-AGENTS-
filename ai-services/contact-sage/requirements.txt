@@ -9,3 +9,6 @@ python-jose[cryptography]
 passlib[bcrypt]
 thefuzz
 PyJWT
+cryptography
+sqlalchemy
+opentelemetry-instrumentation-sqlalchemy
