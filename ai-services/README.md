@@ -1,133 +1,167 @@
+
 # Bank of Anthos - AI Services Layer
 
-This document provides a complete overview of the AI-powered microservices layer for Bank of Anthos. It details the architecture, the individual responsibilities of each AI agent, their API contracts, and their interactions with the core banking services.
+This document provides a comprehensive overview of the AI-powered microservices layer for Bank of Anthos, including architecture, agent responsibilities, API contracts, and the full AI-Meta DB schema.
 
-## Architecture Diagram
+## Architecture Overview
 
-The following diagram illustrates the flow of a user query through the AI services layer and its interaction with the core Bank of Anthos services.
+The AI services layer consists of several microservices ("agents") that work together to process user queries, resolve entities, analyze risk, and execute transactions. Each agent is responsible for a specific domain and interacts with both core banking services and the shared AI-Meta DB.
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant Orchestrator
-    participant Gemini API
-    participant ContactSage
-    participant AnomalySage
-    participant TransactionSage
-    participant CoreContacts as Core Contacts Svc
-    participant CoreLedger as Core LedgerWriter Svc
-    participant AIMetaDB as AI-Meta DB
-
-    User->>Orchestrator: POST /v1/query (e.g., "send $50 to alice")
-    Orchestrator->>Gemini API: Parse intent and entities
-    Gemini API-->>Orchestrator: Return structured intent (transfer, amount, recipient)
-    
-    alt Recipient is a name
-        Orchestrator->>ContactSage: Resolve "alice"
-        ContactSage->>CoreContacts: GET /contacts/testuser
-        CoreContacts-->>ContactSage: Return contact list
-        ContactSage-->>Orchestrator: Return resolved account ID
-    end
-
-    Orchestrator->>AnomalySage: POST /v1/anomaly/check
-    AnomalySage->>AIMetaDB: Read user_profiles, transaction_history
-    AIMetaDB-->>AnomalySage: Return user risk profile
-    AnomalySage->>AIMetaDB: Write to anomaly_logs
-    
-    alt Transaction is suspicious
-        AnomalySage->>AIMetaDB: Write to pending_confirmations
-        AIMetaDB-->>AnomalySage: Return confirmation_id
-        AnomalySage-->>Orchestrator: {status: "suspicious", confirmation_id: ...}
-        Orchestrator-->>User: "Please confirm this transaction"
-    else Transaction is normal
-        AnomalySage-->>Orchestrator: {status: "normal"}
-        Orchestrator->>TransactionSage: POST /v1/transactions/execute
-        TransactionSage->>AIMetaDB: Check/write idempotency_keys
-        TransactionSage->>CoreLedger: POST /transactions (with JWT)
-        CoreLedger-->>TransactionSage: {transaction_id: ..., new_balance: ...}
-        TransactionSage->>AIMetaDB: Write to transaction_logs, update budget_usage
-        TransactionSage-->>Orchestrator: {status: "success", transaction_id: ...}
-        Orchestrator-->>User: "Transaction successful"
-    end
-```
-
-## AI Agents & Services
+## AI Agents & Responsibilities
 
 ### 1. Orchestrator
 
-The single entry point for all user queries. It is responsible for NLU, entity resolution, and coordinating the other AI agents.
-
+- **Role:** Entry point for all user queries. Handles NLU, entity resolution, and coordinates other agents.
 - **Endpoint:** `POST /v1/query`
-- **Request Body:** `{"query": "..."}`
-- **Authentication:** Requires a valid JWT in the `Authorization: Bearer <token>` header.
-- **Interactions:**
-    - Calls **Gemini API** to parse intent.
-    - Calls **Contact-Sage** to resolve recipient names.
-    - Calls **Anomaly-Sage** to perform risk analysis on transactions.
-    - Calls **Transaction-Sage** for non-financial intents (future implementation).
-    - Calls **Balance-Reader** core service directly for balance inquiries.
+- **Authentication:** JWT required.
+- **Interactions:** Calls Gemini API (intent parsing), Contact-Sage (recipient resolution), Anomaly-Sage (risk analysis), Transaction-Sage (execution), and core services.
 
-### 2. Anomaly-Sage
+### 2. Contact-Sage
 
-Performs risk analysis on proposed transactions to identify and flag suspicious or fraudulent activity.
+- **Role:** Resolves contact names to account numbers, manages user contacts.
+- **Endpoints:**
+    - `GET /health` — Service health check.
+    - `GET /contacts/{account_id}` — Get all contacts (proxies to core contacts service).
+    - `POST /contacts/{account_id}` — Add new contact (proxies to core contacts service).
+    - `PUT /contacts/{account_id}/{contact_label}` — Update contact (direct DB).
+    - `DELETE /contacts/{account_id}/{contact_label}` — Delete contact (direct DB).
+    - `POST /contacts/resolve` — Fuzzy resolve contact name (direct DB).
+- **Authentication:** JWT required for all except `/health`.
+- **Backend:** Hybrid proxy to core contacts service and direct access to `accounts-db` for advanced features.
 
+### 3. Anomaly-Sage
+
+- **Role:** Performs risk analysis on transactions, flags suspicious activity.
 - **Endpoint:** `POST /v1/anomaly/check`
-- **Request Body:** `AnomalyCheckRequest` (account_id, amount_cents, recipient_account_id, etc.)
-- **Response Body:** `AnomalyCheckResponse` (status, risk_score, action, confirmation_id)
-- **Interactions:**
-    - Reads from `user_profiles` and `transaction_logs` in the **AI-Meta DB**.
-    - Writes to `anomaly_logs` and `pending_confirmations` in the **AI-Meta DB**.
-    - Does **not** call any other services directly. Its output determines the Orchestrator's next step.
+- **Interactions:** Reads/writes to `user_profiles`, `anomaly_logs`, and `pending_confirmations` in AI-Meta DB.
 
-### 3. Transaction-Sage
+### 4. Transaction-Sage
 
-Executes the financial transaction after it has been cleared by the `Anomaly-Sage`. It is the only AI service that communicates with the core ledger.
-
+- **Role:** Executes transactions after risk clearance.
 - **Endpoint:** `POST /v1/transactions/execute`
-- **Request Body:** `TransactionExecuteRequest` (account_id, amount_cents, recipient_account_id, etc.)
-- **Response Body:** `TransactionExecuteResponse` (status, transaction_id, new_balance, etc.)
-- **Interactions:**
-    - Reads from and writes to `idempotency_keys` in the **AI-Meta DB**.
-    - Calls the **Core LedgerWriter Service** (`POST /transactions`) to execute the transaction.
-    - Writes to `transaction_logs` and updates `budget_usage` in the **AI-Meta DB** after a successful transaction.
-
-### 4. Contact-Sage (To Be Implemented)
-
-Resolves contact names into account numbers.
-
-- **Endpoint:** `POST /v1/contacts/resolve`
-- **Interactions:**
-    - Calls the **Core Contacts Service** (`GET /contacts/<username>`) to fetch the user's address book.
-    - Performs fuzzy matching to find the correct contact.
+- **Interactions:** Reads/writes to `idempotency_keys`, `transaction_logs`, and `budget_usage` in AI-Meta DB; calls core ledger service.
 
 ---
 
-## AI-Meta DB Schema
+# AI-Meta Database (ai-meta-db)
 
-This PostgreSQL database supports the AI agents. See the schema definition in `ai-meta-db/0001_create_ai_meta_tables.sql`.
+The AI-Meta DB is a shared PostgreSQL database supporting all AI agents. Below is the complete schema:
 
-### `anomaly_logs`
-Logs risk analysis results from `anomaly-sage`.
+### 1. anomaly_logs
 
-### `transaction_logs`
-Logs transaction details and categorization from `transaction-sage`.
+| Column Name   | Data Type           | Constraints / Default           |
+|---------------|--------------------|---------------------------------|
+| log_id        | UUID               | PK, DEFAULT `uuid_generate_v4()`|
+| transaction_id| BIGINT             |                                 |
+| account_id    | CHARACTER(10)      | NOT NULL                        |
+| risk_score    | FLOAT              |                                 |
+| status        | VARCHAR            |                                 |
+| created_at    | TIMESTAMP          | DEFAULT `now()`                 |
 
-### `budgets` & `budget_usage`
-Tracks budget allocations and usage per user and category.
+### 2. transaction_logs
 
-### `user_profiles`
-Stores user-specific data for risk analysis.
+| Column Name   | Data Type           | Constraints / Default           |
+|---------------|--------------------|---------------------------------|
+| id            | UUID               | PK, DEFAULT `uuid_generate_v4()`|
+| transaction_id| BIGINT             |                                 |
+| account_id    | CHARACTER(10)      | NOT NULL                        |
+| amount        | INTEGER            | NOT NULL                        |
+| category      | VARCHAR            |                                 |
+| created_at    | TIMESTAMP          | DEFAULT `now()`                 |
 
-### `pending_confirmations`
-Stores pending transaction confirmations for `anomaly-sage`.
+### 3. budgets
 
-### `idempotency_keys`
-Ensures that transactions are not processed more than once by `transaction-sage`.
-| Column | Type | Description |
-|---|---|---|
-| key | VARCHAR(255) | The unique idempotency key from the request header. |
-| account_id | CHARACTER(10) | User account identifier. |
-| status | VARCHAR | `in_progress`, `completed`, or `failed`. |
-| created_at | TIMESTAMP | Log creation time. |
-| response_payload | JSONB | The JSON response of the completed request. |
+| Column Name   | Data Type           | Constraints / Default           |
+|---------------|--------------------|---------------------------------|
+| id            | UUID               | PK, DEFAULT `uuid_generate_v4()`|
+| account_id    | CHARACTER(10)      | NOT NULL                        |
+| category      | VARCHAR            | NOT NULL                        |
+| budget_limit  | INTEGER            | NOT NULL                        |
+| period_start  | DATE               | NOT NULL                        |
+| period_end    | DATE               |                                 |
+
+### 4. budget_usage
+
+| Column Name   | Data Type           | Constraints / Default           |
+|---------------|--------------------|---------------------------------|
+| id            | UUID               | PK, DEFAULT `uuid_generate_v4()`|
+| account_id    | CHARACTER(10)      | NOT NULL                        |
+| category      | VARCHAR            | NOT NULL                        |
+| used_amount   | INTEGER            | NOT NULL                        |
+| period_start  | DATE               | NOT NULL                        |
+| period_end    | DATE               | NOT NULL                        |
+
+### 5. user_profiles
+
+| Column        | Type               | Constraints / Default           |
+|---------------|--------------------|---------------------------------|
+| profile_id    | UUID               | PK, DEFAULT `uuid_generate_v4()`|
+| account_id    | CHARACTER(10)      | UNIQUE, FK → users(accountid)   |
+| mean_txn_amount_cents | INTEGER    |                                 |
+| stddev_txn_amount_cents| INTEGER   |                                 |
+| active_hours  | INTEGER[]          |                                 |
+| threshold_suspicious_multiplier | NUMERIC | DEFAULT `2.0`           |
+| threshold_fraud_multiplier | NUMERIC | DEFAULT `3.0`                 |
+| email_for_alerts | TEXT            |                                 |
+| created_at    | TIMESTAMPTZ        | DEFAULT `now()`                 |
+
+### 6. pending_confirmations
+
+| Column        | Type               | Constraints / Default           |
+|---------------|--------------------|---------------------------------|
+| confirmation_id| UUID              | PK, DEFAULT `uuid_generate_v4()`|
+| account_id    | CHARACTER(10)      | NOT NULL                        |
+| payload       | JSONB              | NOT NULL                        |
+| requested_at  | TIMESTAMPTZ        | DEFAULT `now()`                 |
+| expires_at    | TIMESTAMPTZ        | NOT NULL                        |
+| status        | TEXT               | CHECK (IN `('pending','confirmed','expired','cancelled')`), DEFAULT `'pending'` |
+| confirmation_method | TEXT         |                                 |
+
+### 7. idempotency_keys (for Transaction-Sage)
+
+| Column        | Type               | Constraints / Default           | Description                      |
+|---------------|--------------------|---------------------------------|----------------------------------|
+| key           | VARCHAR(255)       | PK                              | Unique idempotency key           |
+| account_id    | CHARACTER(10)      | NOT NULL                        | Account requesting transaction   |
+| status        | VARCHAR            | NOT NULL, DEFAULT `in_progress` | Execution status                 |
+| created_at    | TIMESTAMP          | DEFAULT `now()`                 | Request registration time        |
+| response_payload | JSONB           |                                 | Cached response for idempotency  |
+
+### 8. llm_envelopes (for Orchestrator, audit & replay)
+
+| Column        | Type               | Constraints / Default           | Description                      |
+|---------------|--------------------|---------------------------------|----------------------------------|
+| envelope_id   | UUID               | PK, DEFAULT `uuid_generate_v4()`| Envelope ID                      |
+| session_id    | VARCHAR            |                                 | Session group                    |
+| raw_llm       | JSONB              | NOT NULL                        | Raw Gemini/ADK response          |
+| validated_envelope | JSONB         | NOT NULL                        | Structured plan                  |
+| correlation_id| VARCHAR            | NOT NULL                        | X-Correlation-ID                 |
+| idempotency_key | VARCHAR          |                                 | Link to idempotency_keys.key     |
+| created_at    | TIMESTAMPTZ        | DEFAULT `now()`                 | Envelope creation time           |
+
+### 9. agent_memory (short-term + persistent memory store)
+
+| Column        | Type               | Constraints / Default           | Description                      |
+|---------------|--------------------|---------------------------------|----------------------------------|
+| id            | UUID               | PK, DEFAULT `uuid_generate_v4()`| Memory record ID                 |
+| session_id    | VARCHAR            | NOT NULL                        | Session identifier               |
+| key           | VARCHAR            | NOT NULL                        | Memory key                       |
+| value         | JSONB              | NOT NULL                        | Stored value                     |
+| created_at    | TIMESTAMPTZ        | DEFAULT `now()`                 | Entry creation time              |
+| expires_at    | TIMESTAMPTZ        |                                 | Optional expiry                  |
+
+### 10. envelope_correlations (link envelopes to downstream actions)
+
+| Column        | Type               | Constraints / Default           | Description                      |
+|---------------|--------------------|---------------------------------|----------------------------------|
+| id            | UUID               | PK, DEFAULT `uuid_generate_v4()`| Correlation row                  |
+| envelope_id   | UUID               | NOT NULL                        | FK → llm_envelopes.envelope_id   |
+| anomaly_log_id| UUID               |                                 | FK → anomaly_logs.log_id         |
+| confirmation_id| VARCHAR           |                                 | FK → pending_confirmations.confirmation_id |
+| transaction_id| VARCHAR            |                                 | FK → transaction_logs.transaction_id |
+| created_at    | TIMESTAMPTZ        | DEFAULT `now()`                 | Correlation creation time        |
+
+---
+
+For more details on each agent, see their individual README files in the `ai-services` directory. For deployment, refer to the corresponding Kubernetes manifests.
 
