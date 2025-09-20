@@ -1,0 +1,75 @@
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: orchestrator
+spec:
+  selector:
+    app: orchestrator
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orchestrator
+  template:
+    metadata:
+      labels:
+        app: orchestrator
+    spec:
+      containers:
+      - name: orchestrator
+        image: orchestrator:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DATABASE_URL
+          value: "postgresql+asyncpg://ai-meta-db:ai-meta-db@ai-meta-db:5432/ai-meta-db"
+        - name: JWT_PUBLIC_KEY
+          valueFrom:
+            secretKeyRef:
+              name: jwt-key-secret
+              key: public-key.pem
+        - name: ANOMALY_SAGE_URL
+          value: "http://anomaly-sage:8081"
+        - name: TRANSACTION_SAGE_URL
+          value: "http://transaction-sage:8082"
+        - name: CONTACT_SAGE_URL
+          value: "http://contact-sage:8083"
+        - name: MONEY_SAGE_URL
+          value: "http://money-sage:8084"
+        - name: GADK_MODEL
+          value: "gemini-1.5-pro-latest"
+        - name: EXCHANGE_RATE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: api-keys-secret
+              key: exchange-rate-api-key
+        - name: EXCHANGE_RATE_URL
+          value: "https://v6.exchangerate-api.com/v6"
+        - name: GADK_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: api-keys-secret
+              key: gadk-api-key
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 10

@@ -1,0 +1,48 @@
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: anomaly-sage
+spec:
+  selector:
+    app: anomaly-sage
+  ports:
+    - protocol: TCP
+      port: 8081
+      targetPort: 8081
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anomaly-sage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anomaly-sage
+  template:
+    metadata:
+      labels:
+        app: anomaly-sage
+    spec:
+      containers:
+      - name: anomaly-sage
+        image: anomaly-sage:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8081
+        env:
+        - name: DATABASE_URL
+          value: "postgresql+asyncpg://ai-meta-db:ai-meta-db@ai-meta-db:5432/ai-meta-db"
+        readinessProbe:
+          httpGet:
+            path: /v1/health
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /v1/health
+            port: 8081
+          initialDelaySeconds: 10
+          periodSeconds: 10

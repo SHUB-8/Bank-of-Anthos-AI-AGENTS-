@@ -1,0 +1,57 @@
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: transaction-sage
+spec:
+  selector:
+    app: transaction-sage
+  ports:
+    - protocol: TCP
+      port: 8082
+      targetPort: 8082
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transaction-sage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: transaction-sage
+  template:
+    metadata:
+      labels:
+        app: transaction-sage
+    spec:
+      containers:
+      - name: transaction-sage
+        image: transaction-sage:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8082
+        env:
+        - name: DATABASE_URL
+          value: "postgresql+asyncpg://ai-meta-db:ai-meta-db@ai-meta-db:5432/ai-meta-db"
+        - name: JWT_PUBLIC_KEY
+          valueFrom:
+            secretKeyRef:
+              name: jwt-key-secret
+              key: public-key.pem
+        - name: LEDGER_WRITER_URL
+          value: "http://ledgerwriter:8088"
+        - name: LOCAL_ROUTING_NUM
+          value: "123456789"
+        readinessProbe:
+          httpGet:
+            path: /v1/health
+            port: 8082
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /v1/health
+            port: 8082
+          initialDelaySeconds: 10
+          periodSeconds: 10
