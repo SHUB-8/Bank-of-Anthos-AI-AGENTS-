@@ -1,219 +1,195 @@
-# ai-services/money-sage/main.py
-"""
-Money-Sage service (FastAPI)
-"""
+# main.py
 import os
-import httpx
-from fastapi import FastAPI, HTTPException, Header, Depends
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any, AsyncGenerator
-from datetime import datetime, date, timedelta
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy import select, Column, String, Integer, DateTime, Date, func, delete
-from sqlalchemy.dialects.postgresql import UUID
-import uuid
-from dotenv import load_dotenv
+import sys
+import logging
+from typing import List, Optional, Dict, Any
+from datetime import date, timedelta, timezone, datetime
+from collections import defaultdict
 
-# Use shared JWT authentication
+import httpx
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Header, Depends
+from pydantic import BaseModel, UUID4
+from sqlalchemy.exc import SQLAlchemyError
+
 from auth import get_current_user_claims
+from db import MoneyDb
 
 load_dotenv()
 
-# --- FastAPI app
-app = FastAPI(title="Money-Sage", version="1.0.0")
+# --- Logging & Configuration ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='{"ts": "%(asctime)s", "level": "%(levelname)s", "service": "money-sage", "message": "%(message)s"}',
+    stream=sys.stdout,
+)
+AI_META_DB_URI = os.getenv("AI_META_DB_URI")
+BALANCE_READER_URL = os.getenv("BALANCE_READER_URL")
+TRANSACTION_HISTORY_URL = os.getenv("TRANSACTION_HISTORY_URL")
 
-# --- HTTPx client
-client = httpx.AsyncClient()
-
-# --- Config
-BALANCE_READER_URL = os.getenv("BALANCE_READER_URL", "http://balancereader:8080")
-TRANSACTION_HISTORY_URL = os.getenv("TRANSACTION_HISTORY_URL", "http://transactionhistory:8086")
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@ai-meta-db:5432/ai_meta_db")
-
-# --- DB setup
-engine = create_async_engine(DATABASE_URL, echo=False)
-async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
-
-class Base(DeclarativeBase):
-    pass
-
-# --- Models
-class TransactionLog(Base):
-    __tablename__ = "transaction_logs"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    transaction_id = Column(Integer, nullable=False, index=True)
-    account_id = Column(String(10), nullable=False, index=True)
-    amount = Column(Integer, nullable=False)
-    category = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-class Budget(Base):
-    __tablename__ = "budgets"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    account_id = Column(String(10), nullable=False, index=True)
-    category = Column(String, nullable=False)
-    budget_limit = Column(Integer, nullable=False)
-    period_start = Column(Date, nullable=False)
-    period_end = Column(Date, nullable=True)
-
-# --- Pydantic models
-class Balance(BaseModel):
-    account_id: str
-    balance: float
-
-class BudgetModel(BaseModel):
-    id: Optional[uuid.UUID] = None
+# --- Pydantic Data Models ---
+class BudgetBase(BaseModel):
     category: str
     budget_limit: int
+
+class BudgetCreate(BudgetBase):
     period_start: date
+    period_end: date
+
+class Budget(BudgetBase):
+    id: UUID4
+    account_id: str
+    period_start: date
+    period_end: date
+
+class BudgetUpdate(BaseModel):
+    budget_limit: Optional[int] = None
+    period_start: Optional[date] = None
     period_end: Optional[date] = None
 
-# --- Deposit Model
-class DepositRequest(BaseModel):
-    account_id: str
-    amount: int
-    from_account_num: str
-    from_routing_num: str
-    uuid: str
+# --- FastAPI Application Setup ---
+app = FastAPI(
+    title="Money-Sage",
+    version="1.3.1", # Final version
+    description="An intelligent financial management service."
+)
 
-async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
-    async with async_session_factory() as session:
-        yield session
+# --- Global Clients ---
+client = httpx.AsyncClient()
+db = MoneyDb(AI_META_DB_URI, logging)
 
-# --- Deposit Endpoint
-@app.post("/v1/deposit")
-async def deposit(request: DepositRequest, db: AsyncSession = Depends(get_db_session), claims: Dict[str, Any] = Depends(get_current_user_claims)):
-    deposit_log = TransactionLog(
-        transaction_id=int(request.uuid[:8], 16),  # Use part of uuid for demo
-        account_id=request.account_id,
-        amount=request.amount,
-        category="deposit",
-        created_at=datetime.utcnow()
-    )
-    db.add(deposit_log)
-    await db.commit()
-    await db.refresh(deposit_log)
-    return {"status": "success", "message": "Deposit successful", "transaction_id": str(deposit_log.id)}
-
-class Deposit(BaseModel):
-    amount: int
-
-@app.post("/v1/deposit/{account_id}")
-async def deposit_to_account(account_id: str, deposit: Deposit, claims: Dict[str, Any] = Depends(get_current_user_claims), authorization: Optional[str] = Header(None)):
-    headers = {"Authorization": authorization} if authorization else {}
-    
-    transaction_sage_url = os.getenv('TRANSACTION_SAGE_URL')
-    
-    # Ensure the URL has a protocol prefix
-    if transaction_sage_url and not transaction_sage_url.startswith(('http://', 'https://')):
-        transaction_sage_url = f"http://{transaction_sage_url}"
-    
-    if not transaction_sage_url:
-        raise HTTPException(status_code=500, detail="TRANSACTION_SAGE_URL environment variable not set")
-    
-    try:
-        # Forward the request to transaction-sage
-        payload = {
-            "account_id": account_id,
-            "amount": deposit["amount"],
-            "transaction_type": "deposit",
-            "metadata": {"source": "money-sage"}
-        }
-        resp = await client.post(f"{transaction_sage_url}/v1/transactions/execute", json=payload, headers=headers)
-        resp.raise_for_status()
-        return resp.json()
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/v1/health")
+# --- API Endpoints ---
+@app.get("/health")
 async def health():
     return {"status": "healthy", "service": "money-sage"}
 
-@app.get("/v1/balance/{account_id}", response_model=Balance)
+@app.get("/balance/{account_id}")
 async def get_balance(account_id: str, claims: Dict[str, Any] = Depends(get_current_user_claims), authorization: Optional[str] = Header(None)):
     headers = {"Authorization": authorization} if authorization else {}
     try:
-        resp = await client.get(f"{BALANCE_READER_URL}/balances/{account_id}", headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
-        return Balance(account_id=account_id, balance=data.get('balance'))
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
-
-@app.get("/v1/history/{account_id}")
-async def get_history(account_id: str, claims: Dict[str, Any] = Depends(get_current_user_claims), authorization: Optional[str] = Header(None)):
-    headers = {"Authorization": authorization} if authorization else {}
-    try:
-        resp = await client.get(f"{TRANSACTION_HISTORY_URL}/transactions/{account_id}", headers=headers)
+        url = f"{BALANCE_READER_URL}/balances/{account_id}"
+        resp = await client.get(url, headers=headers)
         resp.raise_for_status()
         return resp.json()
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
 
-@app.get("/v1/summary/{account_id}")
-async def get_summary(account_id: str, period: str = "monthly", db: AsyncSession = Depends(get_db_session), claims: Dict[str, Any] = Depends(get_current_user_claims)):
-    today = date.today()
-    if period == "daily":
-        start_date = today
-    elif period == "weekly":
-        start_date = today - timedelta(days=today.weekday())
-    else: # monthly
-        start_date = today.replace(day=1)
-    
-    stmt = select(TransactionLog.category, func.sum(TransactionLog.amount).label("total_spent")).where(
-        TransactionLog.account_id == account_id,
-        TransactionLog.created_at >= start_date
-    ).group_by(TransactionLog.category)
-    result = await db.execute(stmt)
-    summary = [{"category": row.category, "total_spent": row.total_spent} for row in result]
-    return summary
+@app.get("/transactions/{account_id}")
+async def get_transactions(account_id: str, claims: Dict[str, Any] = Depends(get_current_user_claims), authorization: Optional[str] = Header(None)):
+    headers = {"Authorization": authorization} if authorization else {}
+    try:
+        url = f"{TRANSACTION_HISTORY_URL}/transactions/{account_id}"
+        resp = await client.get(url, headers=headers)
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
 
-@app.get("/v1/budgets/{account_id}", response_model=List[BudgetModel])
-async def get_budgets(account_id: str, db: AsyncSession = Depends(get_db_session), claims: Dict[str, Any] = Depends(get_current_user_claims)):
-    stmt = select(Budget).where(Budget.account_id == account_id)
-    result = await db.execute(stmt)
-    budgets = result.scalars().all()
-    return budgets
+@app.post("/budgets/{account_id}", response_model=Budget)
+async def create_budget(account_id: str, budget: BudgetCreate, claims: Dict[str, Any] = Depends(get_current_user_claims)):
+    try:
+        new_budget_row = db.create_budget(account_id, budget)
+        if not new_budget_row:
+            raise HTTPException(status_code=500, detail="Failed to create budget.")
+        return dict(new_budget_row._mapping)
+    except SQLAlchemyError as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
-@app.post("/v1/budgets/{account_id}", response_model=BudgetModel)
-async def create_budget(account_id: str, budget: BudgetModel, db: AsyncSession = Depends(get_db_session), claims: Dict[str, Any] = Depends(get_current_user_claims)):
-    new_budget = Budget(
-        account_id=account_id,
-        category=budget.category,
-        budget_limit=budget.budget_limit,
-        period_start=budget.period_start,
-        period_end=budget.period_end
-    )
-    db.add(new_budget)
-    await db.commit()
-    await db.refresh(new_budget)
-    return new_budget
+@app.get("/budgets/{account_id}", response_model=List[Budget])
+async def get_budgets(account_id: str, claims: Dict[str, Any] = Depends(get_current_user_claims)):
+    try:
+        return db.get_budgets(account_id)
+    except SQLAlchemyError as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
-@app.put("/v1/budgets/{account_id}/{budget_id}", response_model=BudgetModel)
-async def update_budget(account_id: str, budget_id: uuid.UUID, budget_update: BudgetModel, db: AsyncSession = Depends(get_db_session), claims: Dict[str, Any] = Depends(get_current_user_claims)):
-    stmt = select(Budget).where(Budget.id == budget_id, Budget.account_id == account_id)
-    result = await db.execute(stmt)
-    db_budget = result.scalars().first()
-    if not db_budget:
-        raise HTTPException(status_code=404, detail="Budget not found")
-    
-    db_budget.category = budget_update.category
-    db_budget.budget_limit = budget_update.budget_limit
-    db_budget.period_start = budget_update.period_start
-    db_budget.period_end = budget_update.period_end
-    
-    await db.commit()
-    await db.refresh(db_budget)
-    return db_budget
+@app.put("/budgets/{account_id}/{category}", response_model=Budget)
+async def update_budget(account_id: str, category: str, budget_update: BudgetUpdate, claims: Dict[str, Any] = Depends(get_current_user_claims)):
+    update_data = budget_update.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No update data provided.")
+    try:
+        updated_count = db.update_budget(account_id, category, update_data)
+        if updated_count == 0:
+            raise HTTPException(status_code=404, detail=f"Budget for category '{category}' not found.")
+        budgets = db.get_budgets(account_id)
+        updated_budget = next((b for b in budgets if b['category'] == category), None)
+        return updated_budget
+    except SQLAlchemyError as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
-@app.delete("/v1/budgets/{account_id}/{budget_id}", status_code=204)
-async def delete_budget(account_id: str, budget_id: uuid.UUID, db: AsyncSession = Depends(get_db_session), claims: Dict[str, Any] = Depends(get_current_user_claims)):
-    stmt = delete(Budget).where(Budget.id == budget_id, Budget.account_id == account_id)
-    result = await db.execute(stmt)
-    if result.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Budget not found")
-    await db.commit()
-    return
+@app.delete("/budgets/{account_id}/{category}")
+async def delete_budget(account_id: str, category: str, claims: Dict[str, Any] = Depends(get_current_user_claims)):
+    try:
+        deleted_count = db.delete_budget(account_id, category)
+        if deleted_count == 0:
+            raise HTTPException(status_code=404, detail=f"Budget for category '{category}' not found.")
+        return {"status": "deleted", "category": category}
+    except SQLAlchemyError as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+# THIS ENDPOINT IS NOW RESTORED
+@app.get("/summary/{account_id}")
+async def get_summary(account_id: str, claims: Dict[str, Any] = Depends(get_current_user_claims)):
+    try:
+        today = datetime.now(timezone.utc).date()
+        start_of_month = today.replace(day=1)
+        end_of_month = (start_of_month + timedelta(days=31)).replace(day=1) - timedelta(days=1)
+        
+        spending_summary = db.get_budget_usage(account_id, start_of_month, end_of_month)
+        return {"account_id": account_id, "spending_by_category": spending_summary}
+    except SQLAlchemyError as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+@app.get("/overview/{account_id}")
+async def get_overview(account_id: str, claims: Dict[str, Any] = Depends(get_current_user_claims)):
+    try:
+        budgets = db.get_budgets(account_id)
+        if not budgets:
+            return {"account_id": account_id, "overview": {}, "message": "No budgets created yet."}
+
+        today = datetime.now(timezone.utc).date()
+        start_of_month = today.replace(day=1)
+        end_of_month = (start_of_month + timedelta(days=31)).replace(day=1) - timedelta(days=1)
+        
+        spending_by_category = db.get_budget_usage(account_id, start_of_month, end_of_month)
+        
+        overview = {}
+        for b in budgets:
+            category = b['category']
+            spent = spending_by_category.get(category, 0)
+            limit = b['budget_limit']
+            remaining = limit - spent
+            status = "on_track"
+            if spent > limit:
+                status = "over_budget"
+            elif limit > 0 and (spent / limit > 0.8):
+                status = "at_risk"
+
+            overview[category] = {
+                "limit": limit, "spent": round(spent, 2),
+                "remaining": round(remaining, 2), "status": status,
+            }
+        return {"account_id": account_id, "overview": overview}
+    except SQLAlchemyError as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+# THIS ENDPOINT IS NOW RESTORED
+@app.get("/tips/{account_id}")
+async def get_saving_tips(account_id: str, claims: Dict[str, Any] = Depends(get_current_user_claims)):
+    tips = []
+    try:
+        overview_data = await get_overview(account_id, claims)
+        overview = overview_data.get("overview", {})
+        for category, data in overview.items():
+            if data.get("status") == "over_budget":
+                tips.append(f"You've gone over your budget for {category}. It's a good time to review your spending in this area.")
+            elif data.get("status") == "at_risk":
+                tips.append(f"You're close to your budget limit for {category} (${data['spent']}/${data['limit']}). Be mindful of your next purchases.")
+        
+        if not tips:
+            tips.append("You're doing a great job staying on track with all your budgets!")
+        
+        return {"account_id": account_id, "tips": tips}
+    except Exception as e:
+        logging.error(f"Error generating tips: {e}")
+        return {"account_id": account_id, "tips": ["Could not generate tips at this time."]}

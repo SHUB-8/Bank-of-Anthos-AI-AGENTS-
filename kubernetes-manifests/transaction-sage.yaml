@@ -1,4 +1,4 @@
-
+# transaction-sage.yaml
 apiVersion: v1
 kind: Service
 metadata:
@@ -8,8 +8,8 @@ spec:
     app: transaction-sage
   ports:
     - protocol: TCP
-      port: 8082
-      targetPort: 8082
+      port: 8086
+      targetPort: 8086
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -30,28 +30,27 @@ spec:
         image: transaction-sage:latest
         imagePullPolicy: IfNotPresent
         ports:
-        - containerPort: 8082
+        - containerPort: 8086
         env:
-        - name: DATABASE_URL
-          value: "postgresql+asyncpg://ai-meta-db:ai-meta-db@ai-meta-db:5432/ai-meta-db"
         - name: JWT_PUBLIC_KEY
           valueFrom:
             secretKeyRef:
               name: jwt-key-secret
               key: public-key.pem
-        - name: LEDGER_WRITER_URL
-          value: "http://ledgerwriter:8088"
-        - name: LOCAL_ROUTING_NUM
-          value: "123456789"
+        - name: AI_META_DB_URI
+          value: "postgresql://ai-meta-db:ai-meta-db@ai-meta-db:5432/ai-meta-db"
+        - name: LEDGERWRITER_URL
+          value: "http://ledgerwriter:8080"
+        
         readinessProbe:
           httpGet:
-            path: /v1/health
-            port: 8082
-          initialDelaySeconds: 5
+            path: /health
+            port: 8086
+          initialDelaySeconds: 10
           periodSeconds: 5
         livenessProbe:
           httpGet:
-            path: /v1/health
-            port: 8082
-          initialDelaySeconds: 10
+            path: /health
+            port: 8086
+          initialDelaySeconds: 15
           periodSeconds: 10

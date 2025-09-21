@@ -1,4 +1,4 @@
-
+# money-sage.yaml
 apiVersion: v1
 kind: Service
 metadata:
@@ -32,28 +32,26 @@ spec:
         ports:
         - containerPort: 8084
         env:
-        - name: DATABASE_URL
-          value: "postgresql+asyncpg://ai-meta-db:ai-meta-db@ai-meta-db:5432/ai-meta-db"
         - name: JWT_PUBLIC_KEY
           valueFrom:
             secretKeyRef:
               name: jwt-key-secret
               key: public-key.pem
+        - name: AI_META_DB_URI
+          value: "postgresql://ai-meta-db:ai-meta-db@ai-meta-db:5432/ai-meta-db"
         - name: BALANCE_READER_URL
           value: "http://balancereader:8080"
         - name: TRANSACTION_HISTORY_URL
-          value: "http://transactionhistory:8086"
-        - name: TRANSACTION_SAGE_URL
-          value: "http://transaction-sage:8082"
+          value: "http://transactionhistory:8080"
         readinessProbe:
           httpGet:
-            path: /v1/health
+            path: /health
             port: 8084
           initialDelaySeconds: 5
           periodSeconds: 5
         livenessProbe:
           httpGet:
-            path: /v1/health
+            path: /health
             port: 8084
           initialDelaySeconds: 10
           periodSeconds: 10

@@ -1,3 +1,4 @@
+# auth.py
 """
 Reusable JWT Authentication Module for FastAPI
 

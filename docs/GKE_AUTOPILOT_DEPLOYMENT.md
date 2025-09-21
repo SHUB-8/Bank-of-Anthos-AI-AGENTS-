@@ -10,11 +10,11 @@ This guide provides instructions for deploying the Bank of Anthos application to
   ```powershell
   gcloud components install kubectl
   ```
-- A powershell environment.
+- A PowerShell environment.
 
 ## 1. Set up your Google Cloud project
 
-First, set your project ID and preferred region as environment variables:
+Set your project ID and preferred region as environment variables:
 
 ```powershell
 $env:PROJECT_ID = "your-gcp-project-id"
@@ -28,99 +28,82 @@ Enable the necessary APIs:
 gcloud services enable container.googleapis.com
 ```
 
+## 2. Build and push images to Google Container Registry (GCR)
 
-## 2. Create a GKE Autopilot Cluster
+Authenticate Docker to GCR:
+```powershell
+gcloud auth configure-docker
+```
+
+Build and tag your image for GCR:
+```powershell
+docker build -t gcr.io/$env:PROJECT_ID/transaction-sage:latest ./ai-services/transaction-sage
+# Repeat for other services
+```
+
+Push the image:
+```powershell
+docker push gcr.io/$env:PROJECT_ID/transaction-sage:latest
+```
+
+## 3. Create a GKE Autopilot Cluster
 
 This command creates a single-zone Autopilot cluster that can scale down to zero to minimize costs.
 
 ```powershell
 gcloud container clusters create-auto bank-of-anthos-autopilot `
-     --region=$env:REGION `
-     --cluster-version=latest `
-     --enable-autoscaling --min-nodes=0 --max-nodes=5
+     --region=$env:REGION
 ```
-- `--enable-autoscaling --min-nodes=0 --max-nodes=5`: This configures the cluster to scale down to 0 nodes when not in use, and scale up to a maximum of 5 nodes.
 
-
-
-## 3. Get Cluster Credentials
+## 4. Get Cluster Credentials
 
 After the cluster is created, get the credentials for `kubectl`:
 ```powershell
 gcloud container clusters get-credentials bank-of-anthos-autopilot --region=$env:REGION
 ```
 
+## 5. Deploy the Application
 
-## 4. Deploy the Application
+All secrets, API keys, and config are loaded from Kubernetes manifests (see `jwt-secret.yaml`, `api-keys-secret.yaml`, etc). No .env files are required.
 
-Now you can deploy the Bank of Anthos application to your GKE cluster.
-     ```powershell
-     kubectl apply -f ./extras/jwt/jwt-secret.yaml
-     ```
-
-1)  **Create the JWT secret:**
-
-     ```powershell
-     kubectl apply -f ./kubernetes-manifests/ai-meta-db-pvc.yaml
-     kubectl apply -f ./kubernetes-manifests/ai-meta-db.yaml
-     kubectl apply -f ./kubernetes-manifests/anomaly-sage.yaml
-     kubectl apply -f ./kubernetes-manifests/transaction-sage.yaml
-     # Apply other manifests as needed
-     ```
-
-**Note:** The conversational agent is not present in the current setup. Only the AI agent services (`anomaly-sage`, `transaction-sage`, `ai-meta-db`) are deployed.
-
-
-## 5. Verify the Deployment
-
-```powershell
-kubectl get pods
+Update your Kubernetes manifests to reference the GCR image:
+```yaml
+image: gcr.io/$PROJECT_ID/transaction-sage:latest
 ```
 
-Check the status of the pods:
+Apply manifests:
+```powershell
+kubectl apply -f ./extras/jwt/jwt-secret.yaml
+kubectl apply -f ./kubernetes-manifests/ai-meta-db-pvc.yaml
+kubectl apply -f ./kubernetes-manifests/ai-meta-db.yaml
+kubectl apply -f ./kubernetes-manifests/anomaly-sage.yaml
+kubectl apply -f ./kubernetes-manifests/transaction-sage.yaml
+# Apply other manifests as needed
+```
 
+## 6. Verify the Deployment
+
+Check the status of the pods:
 ```powershell
 kubectl get pods
 ```
 
 It may take a few minutes for all the pods to be in the `Running` state.
 
-## 6. Access the Services
+## 7. Access the Services
 ```powershell
 kubectl get services
 ```
 
 Get the external IP addresses of the frontend and conversational-agent services:
-
 ```powershell
 kubectl get services
 ```
 
-You will see output similar to this:
-
-```
-NAME                     TYPE           CLUSTER-IP      EXTERNAL-IP     PORT(S)        AGE
-accounts-db              ClusterIP      10.0.0.1        <none>          5432/TCP       5m
-balancereader            ClusterIP      10.0.0.2        <none>          8080/TCP       5m
-contacts                 ClusterIP      10.0.0.3        <none>          8080/TCP       5m
-conversational-agent     LoadBalancer   10.0.0.4        <none>        8080:31234/TCP 5m
-frontend                 LoadBalancer   10.0.0.5        35.x.x.x        80:32345/TCP   5m
-ledger-db                ClusterIP      10.0.0.6        <none>          5432/TCP       5m
-transaction-history      ClusterIP      10.0.0.9        <none>          8080/TCP       5m
-userservice              ClusterIP      10.0.0.10       <none>          8080/TCP       5m
-```
-
 - **Bank of Anthos UI:** Access the application at `http://<EXTERNAL-IP-OF-FRONTEND>`
 
-
-## 7. Cleanup
+## 8. Cleanup
 ```powershell
 gcloud container clusters delete bank-of-anthos-autopilot --region=$env:REGION
-```
-
-To avoid incurring charges to your GCP account, delete the GKE cluster when you are finished:
-
-```powershell
-gcloud container clusters delete bank-of-anthos-autopilot --region=$REGION
 ```
 

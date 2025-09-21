@@ -16,17 +16,15 @@ This guide provides instructions for setting up the Bank of Anthos application f
 
 ## 1. Start your local Kubernetes cluster
 
-Start minikube (or your preferred local Kubernetes solution):
-
-```sh
+Start minikube:
+```powershell
 minikube start
 ```
 
 ## 2. Build the Java services
 
 Build the Java microservices using Maven:
-
-```sh
+```powershell
 mvn clean install -f pom.xml
 ```
 
@@ -35,25 +33,18 @@ mvn clean install -f pom.xml
 Create and activate a Python virtual environment for each Python service (`frontend`, `userservice`, `contacts`, `ai-services/conversational_banking_agent`).
 
 For each service:
-
-```sh
+```powershell
 cd src/<service_name>
 python -m venv .venv
-source .venv/bin/activate  # On Windows, use `.venv\Scripts\activate`
+.venv\Scripts\activate  # On Windows
 pip install -r requirements.txt
 ```
 
 ## 4. Configure environment variables
 
-The `conversational_banking_agent` requires a `GEMINI_API_KEY` to be set in its environment. You can either set this directly in your shell or create a `.env` file in the `ai-services/conversational_banking_agent` directory.
+All secrets, API keys, and config are now loaded from Kubernetes manifests (see `jwt-secret.yaml`, `api-keys-secret.yaml`, etc). No .env files are required.
 
-```
-GEMINI_API_KEY="your_api_key"
-```
-
-## 5. Deploy the application using Skaffold
-
-### Build and load images in Minikube
+## 5. Build and deploy images (local dev)
 
 First, ensure you are using Minikube's Docker environment:
 ```powershell
@@ -62,26 +53,24 @@ First, ensure you are using Minikube's Docker environment:
 
 Build the images for the AI agent services:
 ```powershell
-docker build -t ai-meta-db ./ai-services/ai-meta-db
-docker build -t anomaly-sage ./ai-services/anomaly-sage
-docker build -t transaction-sage ./ai-services/transaction-sage
+docker build -t bank-of-anthos/transaction-sage:latest ./ai-services/transaction-sage
+# Repeat for other services
 ```
 
-### Apply manifests and deploy services
+## 6. Apply manifests and deploy services
 
-Apply the PersistentVolumeClaim for ai-meta-db:
+Apply all manifests (which reference secrets/config via Kubernetes secrets):
 ```powershell
-kubectl apply -f kubernetes-manifests/ai-meta-db-pvc.yaml
+kubectl apply -f ./kubernetes-manifests/
 ```
 
-Apply the manifests for all services:
+### Ensure JWT secret and database constraint
 ```powershell
-kubectl apply -f kubernetes-manifests/ai-meta-db.yaml
-kubectl apply -f kubernetes-manifests/anomaly-sage.yaml
-kubectl apply -f kubernetes-manifests/transaction-sage.yaml
+kubectl apply -f ./extras/jwt/jwt-secret.yaml
 ```
+- Ensure the `budget_usage` table has a unique constraint named `uix_budget_usage` on `(account_id, category, period_start, period_end)`.
 
-### Port-forward and test endpoints
+## 7. Port-forward and test endpoints
 
 Port-forward the services to your local machine (use separate terminals):
 ```powershell
@@ -105,33 +94,56 @@ To access the database, use:
 kubectl exec -it ai-meta-db-0 -- psql -U ai_meta_admin -d ai_meta_db
 ```
 
-## 6. Access the application
+## 8. Access the application
 
-Once all the pods are running, you can access the frontend service.
-
-```sh
+Once all the pods are running, you can access the frontend service:
+```powershell
 minikube service frontend
 ```
-
 This will open the Bank of Anthos application in your web browser.
 
-## 7. Local development workflow
+## 9. Local development workflow
 
 With Skaffold, you can use `skaffold dev` to enable a continuous development workflow. Any changes you make to the source code will be automatically detected, and Skaffold will rebuild and redeploy the updated services.
 
-```sh
+```powershell
 skaffold dev
 ```
 
-## 8. Accessing the Conversational AI Agent
+## 10. Accessing the Conversational AI Agent
 
 **Note:** The conversational agent is not present in the current setup. Only the AI agent services (`anomaly-sage`, `transaction-sage`, `ai-meta-db`) are deployed.
 
-## 9. Stopping the application
+## 11. Stopping the application
 
 To stop and clean up the application, run:
-
-```sh
+```powershell
 skaffold delete
 minikube stop
+```
+
+## 12. Building and pushing images for GKE
+
+When deploying to GKE, build and push your images to Google Container Registry (GCR):
+
+```powershell
+# Authenticate Docker to GCR
+ gcloud auth configure-docker
+
+# Build and tag your image for GCR
+ docker build -t gcr.io/$env:PROJECT_ID/transaction-sage:latest ./ai-services/transaction-sage
+ # Repeat for other services
+
+# Push the image
+ docker push gcr.io/$env:PROJECT_ID/transaction-sage:latest
+```
+
+Update your Kubernetes manifests to reference the GCR image:
+```yaml
+image: gcr.io/$PROJECT_ID/transaction-sage:latest
+```
+
+Apply manifests as usual:
+```powershell
+kubectl apply -f ./kubernetes-manifests/
 ```

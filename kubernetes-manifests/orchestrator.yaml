@@ -55,7 +55,7 @@ spec:
               name: api-keys-secret
               key: exchange-rate-api-key
         - name: EXCHANGE_RATE_URL
-          value: "https://v6.exchangerate-api.com/v6"
+          value: <your-exchange-rate-api-url-here>
         - name: GADK_API_KEY
           valueFrom:
             secretKeyRef:
