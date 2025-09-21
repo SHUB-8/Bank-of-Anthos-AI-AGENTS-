@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS budget_usage (
     category VARCHAR NOT NULL,
     used_amount INTEGER NOT NULL,
     period_start DATE NOT NULL,
-    period_end DATE NOT NULL
+    period_end DATE NOT NULL,
+    CONSTRAINT uix_budget_usage UNIQUE (account_id, category, period_start, period_end)
 );
 
 -- 5. user_profiles
