@@ -93,7 +93,6 @@ The AI-Meta DB is a shared PostgreSQL database supporting all AI agents. Below i
 | used_amount   | INTEGER            | NOT NULL                        |
 | period_start  | DATE               | NOT NULL                        |
 | period_end    | DATE               | NOT NULL                        |
-| **UNIQUE CONSTRAINT** | (account_id, category, period_start, period_end) | `uix_budget_usage` |
 
 ### 5. user_profiles
 
