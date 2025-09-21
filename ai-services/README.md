@@ -1,4 +1,3 @@
-
 # Bank of Anthos - AI Services Layer
 
 This document provides a comprehensive overview of the AI-powered microservices layer for Bank of Anthos, including architecture, agent responsibilities, API contracts, and the full AI-Meta DB schema.
@@ -13,7 +12,7 @@ The AI services layer consists of several microservices ("agents") that work tog
 
 - **Role:** Entry point for all user queries. Handles NLU, entity resolution, and coordinates other agents.
 - **Endpoint:** `POST /v1/query`
-- **Authentication:** JWT required.
+- **Authentication:** JWT required (loaded from Kubernetes secret, see manifests).
 - **Interactions:** Calls Gemini API (intent parsing), Contact-Sage (recipient resolution), Anomaly-Sage (risk analysis), Transaction-Sage (execution), and core services.
 
 ### 2. Contact-Sage
@@ -26,20 +25,24 @@ The AI services layer consists of several microservices ("agents") that work tog
     - `PUT /contacts/{account_id}/{contact_label}` — Update contact (direct DB).
     - `DELETE /contacts/{account_id}/{contact_label}` — Delete contact (direct DB).
     - `POST /contacts/resolve` — Fuzzy resolve contact name (direct DB).
-- **Authentication:** JWT required for all except `/health`.
+- **Authentication:** JWT required for all except `/health` (JWT loaded from secret).
 - **Backend:** Hybrid proxy to core contacts service and direct access to `accounts-db` for advanced features.
+- **Config:** All API keys and config loaded from Kubernetes secrets/manifests.
 
 ### 3. Anomaly-Sage
 
 - **Role:** Performs risk analysis on transactions, flags suspicious activity.
 - **Endpoint:** `POST /v1/anomaly/check`
 - **Interactions:** Reads/writes to `user_profiles`, `anomaly_logs`, and `pending_confirmations` in AI-Meta DB.
+- **Config:** All API keys and config loaded from Kubernetes secrets/manifests.
 
 ### 4. Transaction-Sage
 
 - **Role:** Executes transactions after risk clearance.
-- **Endpoint:** `POST /v1/transactions/execute`
+- **Endpoint:** `POST /v1/execute-transaction`
+- **Authentication:** JWT required (forwarded to ledgerwriter).
 - **Interactions:** Reads/writes to `idempotency_keys`, `transaction_logs`, and `budget_usage` in AI-Meta DB; calls core ledger service.
+- **Config:** All API keys and config loaded from Kubernetes secrets/manifests.
 
 ---
 
@@ -90,6 +93,7 @@ The AI-Meta DB is a shared PostgreSQL database supporting all AI agents. Below i
 | used_amount   | INTEGER            | NOT NULL                        |
 | period_start  | DATE               | NOT NULL                        |
 | period_end    | DATE               | NOT NULL                        |
+| **UNIQUE CONSTRAINT** | (account_id, category, period_start, period_end) | `uix_budget_usage` |
 
 ### 5. user_profiles
 
@@ -163,5 +167,5 @@ The AI-Meta DB is a shared PostgreSQL database supporting all AI agents. Below i
 
 ---
 
-For more details on each agent, see their individual README files in the `ai-services` directory. For deployment, refer to the corresponding Kubernetes manifests.
+For more details on each agent, see their individual README files in the `ai-services` directory. For deployment, refer to the corresponding Kubernetes manifests. All secrets, API keys, and config are loaded from manifests (see `api-keys-secret.yaml`, `jwt-secret.yaml`, etc). No .env files are required.
 
