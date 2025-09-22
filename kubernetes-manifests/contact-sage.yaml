@@ -41,15 +41,22 @@ spec:
           value: "postgresql://accounts-admin:accounts-pwd@accounts-db:5432/accounts-db"
         - name: CONTACTS_SERVICE_URL
           value: "http://contacts:8080"
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
         readinessProbe:
           httpGet:
             path: /health
             port: 8083
           initialDelaySeconds: 5
-          periodSeconds: 5
+          periodSeconds: 10
         livenessProbe:
           httpGet:
             path: /health
             port: 8083
           initialDelaySeconds: 10
-          periodSeconds: 10
+          periodSeconds: 20

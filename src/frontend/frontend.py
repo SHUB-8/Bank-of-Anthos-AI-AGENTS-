@@ -633,7 +633,7 @@ def create_app():
                 return jsonify({"error": "Message required"}), 400
             
             # Get conversational agent URL
-            orchestrator_addr = os.getenv('ORCHESTRATOR_API_ADDR', 'http://orchestrator:8000')
+            orchestrator_addr = os.getenv('ORCHESTRATOR_API_ADDR', 'http://orchestrator:8082')
             orchestrator_url = f"{orchestrator_addr}/query"
             
             # Prepare request for conversational agent
@@ -694,7 +694,7 @@ def create_app():
             token_data = decode_token(token)
             user_id = token_data['user']
 
-            orchestrator_addr = os.getenv('ORCHESTRATOR_API_ADDR', 'http://orchestrator:8000')
+            orchestrator_addr = os.getenv('ORCHESTRATOR_API_ADDR', 'http://orchestrator:8082')
             notifications_url = f"{orchestrator_addr}/notifications/{user_id}"
 
             headers = {

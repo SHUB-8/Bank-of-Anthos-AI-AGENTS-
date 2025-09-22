@@ -52,7 +52,7 @@ The AI-Meta DB is a shared PostgreSQL database supporting all AI agents. Below i
 
 ### 1. anomaly_logs
 
-| Column Name   | Data Type           | Constraints / Default           |
+| Column Name   | Data Type          | Constraints / Default           |
 |---------------|--------------------|---------------------------------|
 | log_id        | UUID               | PK, DEFAULT `uuid_generate_v4()`|
 | transaction_id| BIGINT             |                                 |
@@ -63,7 +63,7 @@ The AI-Meta DB is a shared PostgreSQL database supporting all AI agents. Below i
 
 ### 2. transaction_logs
 
-| Column Name   | Data Type           | Constraints / Default           |
+| Column Name   | Data Type          | Constraints / Default           |
 |---------------|--------------------|---------------------------------|
 | id            | UUID               | PK, DEFAULT `uuid_generate_v4()`|
 | transaction_id| BIGINT             |                                 |
@@ -74,7 +74,7 @@ The AI-Meta DB is a shared PostgreSQL database supporting all AI agents. Below i
 
 ### 3. budgets
 
-| Column Name   | Data Type           | Constraints / Default           |
+| Column Name   | Data Type          | Constraints / Default           |
 |---------------|--------------------|---------------------------------|
 | id            | UUID               | PK, DEFAULT `uuid_generate_v4()`|
 | account_id    | CHARACTER(10)      | NOT NULL                        |
@@ -85,7 +85,7 @@ The AI-Meta DB is a shared PostgreSQL database supporting all AI agents. Below i
 
 ### 4. budget_usage
 
-| Column Name   | Data Type           | Constraints / Default           |
+| Column Name   | Data Type          | Constraints / Default           |
 |---------------|--------------------|---------------------------------|
 | id            | UUID               | PK, DEFAULT `uuid_generate_v4()`|
 | account_id    | CHARACTER(10)      | NOT NULL                        |
@@ -103,7 +103,7 @@ The AI-Meta DB is a shared PostgreSQL database supporting all AI agents. Below i
 | mean_txn_amount_cents | INTEGER    |                                 |
 | stddev_txn_amount_cents| INTEGER   |                                 |
 | active_hours  | INTEGER[]          |                                 |
-| threshold_suspicious_multiplier | NUMERIC | DEFAULT `2.0`           |
+| threshold_suspicious_multiplier    | NUMERIC | DEFAULT `2.0`         |
 | threshold_fraud_multiplier | NUMERIC | DEFAULT `3.0`                 |
 | email_for_alerts | TEXT            |                                 |
 | created_at    | TIMESTAMPTZ        | DEFAULT `now()`                 |

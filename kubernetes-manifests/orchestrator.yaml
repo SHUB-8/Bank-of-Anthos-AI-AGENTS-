@@ -1,4 +1,4 @@
-
+# orchestrator.yaml
 apiVersion: v1
 kind: Service
 metadata:
@@ -8,8 +8,8 @@ spec:
     app: orchestrator
   ports:
     - protocol: TCP
-      port: 8000
-      targetPort: 8000
+      port: 8082
+      targetPort: 8082
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -30,46 +30,48 @@ spec:
         image: orchestrator:latest
         imagePullPolicy: IfNotPresent
         ports:
-        - containerPort: 8000
+        - containerPort: 8082
         env:
-        - name: DATABASE_URL
-          value: "postgresql+asyncpg://ai-meta-db:ai-meta-db@ai-meta-db:5432/ai-meta-db"
+        # --- Gemini API Key ---
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: gemini-api-key-secret
+              key: key
+        # --- Database URI ---
+        - name: AI_META_DB_URI
+          value: "postgresql://ai-meta-db:ai-meta-db@ai-meta-db:5432/ai-meta-db"
+        # --- JWT Public Key ---
         - name: JWT_PUBLIC_KEY
           valueFrom:
             secretKeyRef:
-              name: jwt-key-secret
-              key: public-key.pem
-        - name: ANOMALY_SAGE_URL
-          value: "http://anomaly-sage:8081"
-        - name: TRANSACTION_SAGE_URL
-          value: "http://transaction-sage:8082"
+              name: jwt-secret
+              key: public_key
+        # --- AI Agent Service URLs ---
         - name: CONTACT_SAGE_URL
           value: "http://contact-sage:8083"
         - name: MONEY_SAGE_URL
           value: "http://money-sage:8084"
-        - name: GADK_MODEL
-          value: "gemini-1.5-pro-latest"
-        - name: EXCHANGE_RATE_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: api-keys-secret
-              key: exchange-rate-api-key
-        - name: EXCHANGE_RATE_URL
-          value: <your-exchange-rate-api-url-here>
-        - name: GADK_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: api-keys-secret
-              key: gadk-api-key
+        - name: ANOMALY_SAGE_URL
+          value: "http://anomaly-sage:8085"
+        - name: TRANSACTION_SAGE_URL
+          value: "http://transaction-sage:8086"
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
         readinessProbe:
           httpGet:
             path: /health
-            port: 8000
+            port: 8082
           initialDelaySeconds: 5
-          periodSeconds: 5
+          periodSeconds: 10
         livenessProbe:
           httpGet:
             path: /health
-            port: 8000
+            port: 8082
           initialDelaySeconds: 10
-          periodSeconds: 10
+          periodSeconds: 20

@@ -42,15 +42,22 @@ spec:
         - name: LEDGERWRITER_URL
           value: "http://ledgerwriter:8080"
         
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
         readinessProbe:
           httpGet:
             path: /health
             port: 8086
-          initialDelaySeconds: 10
-          periodSeconds: 5
+          initialDelaySeconds: 5
+          periodSeconds: 10
         livenessProbe:
           httpGet:
             path: /health
             port: 8086
-          initialDelaySeconds: 15
-          periodSeconds: 10
+          initialDelaySeconds: 10
+          periodSeconds: 20
