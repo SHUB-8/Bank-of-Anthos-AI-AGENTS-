@@ -29,17 +29,99 @@ gcloud services enable container.googleapis.com
 ```
 
 
+
 ## 2. Create a GKE Autopilot Cluster
 
-This command creates a single-zone Autopilot cluster that can scale down to zero to minimize costs.
+This command creates a single-zone Autopilot cluster. Autopilot manages node scaling automatically.
 
 ```powershell
-gcloud container clusters create-auto bank-of-anthos-autopilot `
-     --region=$env:REGION `
-     --cluster-version=latest `
-     --enable-autoscaling --min-nodes=0 --max-nodes=5
+gcloud container clusters create-auto bank-of-anthos-autopilot --region=$env:REGION --cluster-version=latest
 ```
-- `--enable-autoscaling --min-nodes=0 --max-nodes=5`: This configures the cluster to scale down to 0 nodes when not in use, and scale up to a maximum of 5 nodes.
+
+---
+
+## 3. Build and Push Docker Images to Artifact Registry
+
+Authenticate Docker:
+```powershell
+gcloud auth configure-docker us-central1-docker.pkg.dev
+```
+
+Build and tag your images (example for frontend and conversationalagent):
+```powershell
+docker build --no-cache -t frontend:latest ./src/frontend
+docker tag frontend:latest us-central1-docker.pkg.dev/$env:PROJECT_ID/bank-of-anthos/frontend:latest
+docker push us-central1-docker.pkg.dev/$env:PROJECT_ID/bank-of-anthos/frontend:latest
+
+docker build --no-cache -t conversationalagent:latest ./src/conversational_banking_agent
+docker tag conversationalagent:latest us-central1-docker.pkg.dev/$env:PROJECT_ID/bank-of-anthos/conversationalagent:latest
+docker push us-central1-docker.pkg.dev/$env:PROJECT_ID/bank-of-anthos/conversationalagent:latest
+```
+
+---
+
+## 4. Update Kubernetes Manifests
+
+Edit `frontend.yaml` and `conversational-agent.yaml` to use the new image URLs:
+```
+image: us-central1-docker.pkg.dev/$env:PROJECT_ID/bank-of-anthos/frontend:latest
+image: us-central1-docker.pkg.dev/$env:PROJECT_ID/bank-of-anthos/conversationalagent:latest
+```
+
+---
+
+## 5. Create Required Secrets
+
+Create the JWT secret:
+```powershell
+kubectl apply -f ./extras/jwt/jwt-secret.yaml
+```
+
+Create the Gemini API key secret:
+```powershell
+kubectl create secret generic gemini-api-key --from-literal=api-key=YOUR_GEMINI_API_KEY
+```
+
+---
+
+## 6. Deploy the Application
+
+Apply all manifests:
+```powershell
+kubectl apply -f ./kubernetes-manifests
+```
+
+---
+
+## 7. Verify the Deployment
+
+Check pod status:
+```powershell
+kubectl get pods
+```
+All pods should be in the `Running` state.
+
+---
+
+## 8. Access the Services
+
+Get service details:
+```powershell
+kubectl get services
+```
+Find the `EXTERNAL-IP` for the `frontend` service and access the app at:
+```
+http://<EXTERNAL-IP-OF-FRONTEND>
+```
+
+---
+
+## 9. Cleanup
+
+To avoid charges, delete the cluster when finished:
+```powershell
+gcloud container clusters delete bank-of-anthos-autopilot --region=$env:REGION
+```
 
 
 

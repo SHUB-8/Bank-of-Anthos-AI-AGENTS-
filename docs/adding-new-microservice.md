@@ -58,6 +58,5 @@ The file is available here: https://github.com/GoogleCloudPlatform/bank-of-antho
 
 Finally, update the project's documentation to reflect the addition of your new microservice. This may include:
 
-- Adding a section to the main `README.md` if the service introduces significant new functionality.
+ `NewArchitecture.png`
 - Updating the architecture diagrams in the `docs/img` directory.
-- Adding a new document in the `docs` directory if the service requires detailed explanation.

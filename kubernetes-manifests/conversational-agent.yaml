@@ -80,7 +80,7 @@ spec:
                 secretKeyRef:
                   name: gemini-api-key
                   key: api-key
-          image: conversationalagent:latest
+          image: us-central1-docker.pkg.dev/practical-yew-469816-d9/bank-of-anthos/conversationalagent:latest
           imagePullPolicy: IfNotPresent
           livenessProbe:
             httpGet:

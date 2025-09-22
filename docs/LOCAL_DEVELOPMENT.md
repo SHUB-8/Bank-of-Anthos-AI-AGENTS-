@@ -1,6 +1,7 @@
-# Local Development Setup
 
-This guide provides instructions for setting up the Bank of Anthos application for local development, including all microservices and the conversational AI agent.
+# Local Development Setup (Minikube)
+
+This guide provides step-by-step instructions for running the Bank of Anthos application locally on Minikube, including all microservices and the conversational AI agent.
 
 ## Prerequisites
 
@@ -14,94 +15,78 @@ This guide provides instructions for setting up the Bank of Anthos application f
 - [pip](https://pip.pypa.io/en/stable/installation/)
 - [gcloud CLI](https://cloud.google.com/sdk/gcloud) (optional, for GCP integration)
 
-## 1. Start your local Kubernetes cluster
 
-Start minikube (or your preferred local Kubernetes solution):
+## 1. Start Minikube
 
+Start your local Kubernetes cluster:
 ```sh
-minikube start
+minikube start --memory=4096 --cpus=4
 ```
 
-## 2. Build the Java services
 
-Build the Java microservices using Maven:
+## 2. Build Microservice Images
 
+Build Java services:
 ```sh
 mvn clean install -f pom.xml
 ```
 
-## 3. Set up Python environments
-
-Create and activate a Python virtual environment for each Python service (`frontend`, `userservice`, `contacts`, `conversational_banking_agent`).
-
-For each service:
-
+Build Python services (frontend, userservice, contacts, conversational_banking_agent):
 ```sh
-cd src/<service_name>
-python -m venv .venv
-source .venv/bin/activate  # On Windows, use `.venv\Scripts\activate`
-pip install -r requirements.txt
+# Example for frontend
+cd src/frontend
+docker build -t frontend:latest .
+# Repeat for other Python services
 ```
 
-## 4. Configure environment variables
 
-The `conversational_banking_agent` requires a `GEMINI_API_KEY` to be set in its environment. You can either set this directly in your shell or create a `.env` file in the `src/conversational_banking_agent` directory.
+## 3. Configure Environment Variables & Secrets
 
-```
-GEMINI_API_KEY="your_api_key"
-```
-
-## 5. Deploy the application using Skaffold
-
-Skaffold handles the building, pushing, and deploying of the application.
-
-From the root of the project, run:
-
+Set up the Gemini API key for the conversational agent:
 ```sh
-skaffold run
+kubectl create secret generic gemini-api-key --from-literal=api-key=YOUR_GEMINI_API_KEY
 ```
 
-This will:
 
-1.  Build the container images for each microservice.
-2.  Push the images to your local Docker registry.
-3.  Deploy the Kubernetes manifests to your local cluster.
+## 4. Deploy the Application to Minikube
 
-## 6. Access the application
+Apply the JWT secret:
+```sh
+kubectl apply -f ./extras/jwt/jwt-secret.yaml
+```
 
-Once all the pods are running, you can access the frontend service.
+Apply all Kubernetes manifests:
+```sh
+kubectl apply -f ./kubernetes-manifests
+```
 
+
+## 5. Access the Application
+
+Once all pods are running, expose and access the frontend:
 ```sh
 minikube service frontend
 ```
+This will open the Bank of Anthos web UI in your browser.
 
-This will open the Bank of Anthos application in your web browser.
 
-## 7. Local development workflow
+## 6. Accessing the Conversational AI Agent
 
-With Skaffold, you can use `skaffold dev` to enable a continuous development workflow. Any changes you make to the source code will be automatically detected, and Skaffold will rebuild and redeploy the updated services.
-
+Get the URL of the conversational-agent service:
 ```sh
-skaffold dev
-```
-
-## 8. Accessing the Conversational AI Agent
-
-The conversational AI agent is available at the `/chat` endpoint of the `conversational-agent` service. You can interact with it using a tool like `curl` or Postman.
-
-```sh
-# Get the URL of the conversational-agent service
 minikube service conversational-agent --url
-
-# Send a request to the chat endpoint
+```
+Interact with the `/chat` endpoint using curl or Postman:
+```sh
 curl -X POST -H "Content-Type: application/json" -d '{"message": "what is my balance?"}' <service_url>/chat
 ```
 
-## 9. Stopping the application
 
-To stop and clean up the application, run:
+## 7. Stopping the Application
 
+To stop and clean up:
 ```sh
-skaffold delete
+kubectl delete -f ./kubernetes-manifests
+kubectl delete secret gemini-api-key
 minikube stop
 ```

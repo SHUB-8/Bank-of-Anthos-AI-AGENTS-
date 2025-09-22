@@ -1,32 +1,33 @@
+
 # Conversational Banking Agent
 
-This microservice provides a conversational AI interface for Bank of Anthos customers to interact with their accounts using natural language.
+This microservice provides a conversational AI interface for Bank of Anthos customers to interact with their accounts using natural language. Built with FastAPI, it integrates Gemini AI for advanced intent extraction and supports secure JWT authentication.
 
 ## Features
+- Natural Language Understanding (intent classification, entity extraction)
+- Multi-currency support (automatic conversion)
+- Account operations: balance inquiry, transfers, deposits, transaction history
+- Contact management: transfer funds to saved contacts by name
+- JWT authentication and secure integration with Bank of Anthos
+- Conversation memory for context-aware responses
+- Gemini AI integration (via SDK or HTTP API)
 
-- **Natural Language Understanding**: Process banking queries using intent classification
-- **Multi-currency Support**: Automatic currency conversion for international transactions  
-- **Account Operations**: Balance inquiries, transfers, deposits, transaction history
-- **Contact Management**: Transfer funds to saved contacts using names
-- **JWT Authentication**: Secure integration with Bank of Anthos authentication
-
-## API Endpoints
-
-- `POST /chat` - Main conversational interface
-- `GET /version` - Service version information
-- `GET /ready` - Readiness probe
-- `GET /healthy` - Health check
+## Endpoints
+| Endpoint      | Method | Description |
+|-------------- |--------|-------------|
+| `/chat`       | POST   | Main conversational interface |
+| `/version`    | GET    | Service version information |
+| `/ready`      | GET    | Readiness probe |
+| `/healthy`    | GET    | Health check |
 
 ## Integration
-
-The service integrates with the following Bank of Anthos components:
-- **balancereader**: Account balance queries
-- **ledgerwriter**: Transaction processing (deposits, transfers)
-- **transactionhistory**: Recent transaction retrieval
-- **contacts**: User contact management
+Integrates with:
+- `balancereader`: Account balance queries
+- `ledgerwriter`: Transaction processing (deposits, transfers)
+- `transactionhistory`: Recent transaction retrieval
+- `contacts`: User contact management
 
 ## Usage Example
-
 ```json
 POST /chat
 Authorization: Bearer <jwt-token>
@@ -35,7 +36,6 @@ Authorization: Bearer <jwt-token>
     "session_id": "optional-session-id"
 }
 ```
-
 Response:
 ```json
 {
@@ -56,21 +56,20 @@ Response:
 ```
 
 ## Environment Variables
+- `BALANCES_API_ADDR`, `TRANSACTIONS_API_ADDR`, `HISTORY_API_ADDR`, `CONTACTS_API_ADDR`, `USERSERVICE_API_ADDR`: Service addresses
+- `PUB_KEY_PATH` or `JWT_PUBLIC_KEY`: JWT public key for authentication
+- `LOCAL_ROUTING_NUM`: Local bank routing number (default: 883745000)
+- `GEMINI_API_KEY`: Gemini API key for AI integration (optional)
+- `BACKEND_TIMEOUT`: Request timeout (default: 4)
+- `VERSION`: Service version string
 
-Core service addresses (match frontend naming):
-- `BALANCES_API_ADDR` (balancereader)
-- `TRANSACTIONS_API_ADDR` (ledgerwriter)
-- `HISTORY_API_ADDR` (transactionhistory)
-- `CONTACTS_API_ADDR` (contacts)
-- `USERSERVICE_API_ADDR` (userservice)
+## Deployment
+- See [GKE Autopilot Deployment Guide](/docs/GKE_AUTOPILOT_DEPLOYMENT.md)
+- Kubernetes resources: [conversational-agent deployment & service](/kubernetes-manifests/conversational-agent.yaml)
 
-Security & routing:
-- `PUB_KEY_PATH` path to JWT public key (alternatively `JWT_PUBLIC_KEY` base64)
-- `LOCAL_ROUTING_NUM` local bank routing number (default: 883745000)
-
-AI Integration:
-- `GEMINI_API_KEY` enables Gemini intent & parameter extraction (optional)
-
-Misc:
-- `BACKEND_TIMEOUT` request timeout seconds (default 4)
-- `VERSION` service version string
+## Usage
+Build and run locally:
+```sh
+uvicorn app_real:app --host 0.0.0.0 --port 8080
+```
+Or deploy to Kubernetes as described above.

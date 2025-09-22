@@ -22,7 +22,7 @@ If you are using Bank of Anthos, please ★Star this repository to show your int
 
 ## Service architecture
 
-![Architecture Diagram](/docs/img/architecture.png)
+![Architecture Diagram](/docs/img/NewArchitecture.png)
 
 | Service                                                 | Language      | Description                                                                                                                                  |
 | ------------------------------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -34,11 +34,12 @@ If you are using Bank of Anthos, please ★Star this repository to show your int
 | [user-service](/src/accounts/userservice)              | Python        | Manages user accounts and authentication. Signs JWTs used for authentication by other services.                                              |
 | [contacts](/src/accounts/contacts)                     | Python        | Stores list of other accounts associated with a user. Used for drop down in "Send Payment" and "Deposit" forms.                              |
 | [accounts-db](/src/accounts/accounts-db)               | PostgreSQL    | Database for user accounts and associated data. Option to pre-populate with demo users.                                                      |
-| [conversational-agent](/src/conversational-agent)        | Python        | Provides a conversational AI interface for customers to interact with their accounts using natural language.                               |
+| [frontend](/src/frontend)                              | Python (Flask) | User-facing web interface: authentication, account overview, payments, signup/login, REST API integration. |
+| [conversational_banking_agent](/src/conversational_banking_agent) | Python (FastAPI) | Conversational AI microservice: natural language banking, multi-currency, Gemini AI integration, JWT authentication. |
 
 ### Conversational Banking Agent
 
-The [Conversational Banking Agent](/src/conversational_banking_agent/README.md) is a Python-based microservice that provides a conversational AI interface for Bank of Anthos customers. It uses natural language understanding to process banking queries and can perform tasks like checking balances, transferring funds, and viewing transaction history. The agent is designed to be easily integrated into the existing Bank of Anthos architecture and can be deployed as a separate microservice.
+The [Conversational Banking Agent](/src/conversational_banking_agent/README.md) is a FastAPI-based microservice that enables customers to interact with their accounts using natural language. It supports multi-currency, contact management, JWT authentication, and integrates Gemini AI for advanced intent extraction. The agent maintains conversation context for more natural interactions and is easily integrated into the Bank of Anthos architecture.
 
 ## Interactive quickstart (GKE)
 
@@ -79,12 +80,19 @@ The following button opens up an interactive tutorial showing how to deploy Bank
 
    Creating the cluster may take a few minutes.
 
-5. Deploy Bank of Anthos to the cluster.
+5. Build and push Docker images for frontend and conversational agent to Artifact Registry (see [GKE Autopilot Deployment Guide](/docs/GKE_AUTOPILOT_DEPLOYMENT.md)).
 
+6. Update Kubernetes manifests to use your Artifact Registry image URLs.
+
+7. Create required secrets:
    ```sh
    kubectl apply -f ./extras/jwt/jwt-secret.yaml
+   kubectl create secret generic gemini-api-key --from-literal=api-key=YOUR_GEMINI_API_KEY
+   ```
+
+8. Deploy Bank of Anthos to the cluster:
+   ```sh
    kubectl apply -f ./kubernetes-manifests
-   kubectl apply -f ./kubernetes-manifests/conversational-agent.yaml
    ```
 
 6. Wait for the pods to be ready.
@@ -109,13 +117,11 @@ The following button opens up an interactive tutorial showing how to deploy Bank
    userservice-78dc876bff-pdhtl          1/1     Running   0          96s
    ```
 
-7. Access the web frontend in a browser using the frontend's external IP.
-
+9. Access the web frontend in a browser using the frontend's external IP:
    ```sh
-   kubectl get service frontend | awk '{print $4}'
+   kubectl get services
    ```
-
-   Visit `http://EXTERNAL_IP` in a web browser to access your instance of Bank of Anthos.
+   Visit `http://<EXTERNAL-IP-OF-FRONTEND>` in a web browser to access your instance of Bank of Anthos.
 
 8. Once you are done with it, delete the GKE cluster.
 

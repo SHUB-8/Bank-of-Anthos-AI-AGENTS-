@@ -103,7 +103,7 @@ spec:
                 name: environment-config
             - configMapRef:
                 name: service-api-config
-          image: frontend:latest
+          image: us-central1-docker.pkg.dev/practical-yew-469816-d9/bank-of-anthos/frontend:latest
           imagePullPolicy: IfNotPresent
           livenessProbe:
             httpGet:
