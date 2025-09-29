@@ -20,7 +20,7 @@ If you are using Bank of Anthos, please ★Star this repository to show your int
 | [![Login](/docs/img/login.png)](/docs/img/login.png) | [![User Transactions](/docs/img/transactions.png)](/docs/img/transactions.png) |
 
 
-## Service architecture
+## System architecture
 
 ![Architecture Diagram](/docs/img/NewArchitecture.png)
 
