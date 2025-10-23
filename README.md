@@ -129,13 +129,21 @@ The following button opens up an interactive tutorial showing how to deploy Bank
 
    Creating the cluster may take a few minutes.
 
-5. Deploy Bank of Anthos to the cluster.
+
+5. Deploy Bank of Anthos and all AI agent microservices to the cluster.
 
    ```sh
    kubectl apply -f ./extras/jwt/jwt-secret.yaml
    kubectl apply -f ./kubernetes-manifests
-   kubectl apply -f ./kubernetes-manifests/conversational-agent.yaml
+   # Deploy AI agent microservices and metadata DB
+   kubectl apply -f ./kubernetes-manifests/ai-meta-db.yaml
+   kubectl apply -f ./kubernetes-manifests/anomaly-sage.yaml
+   kubectl apply -f ./kubernetes-manifests/transaction-sage.yaml
+   kubectl apply -f ./kubernetes-manifests/contact-sage.yaml
+   kubectl apply -f ./kubernetes-manifests/money-sage.yaml
+   kubectl apply -f ./kubernetes-manifests/orchestrator.yaml
    ```
+
 
 6. Wait for the pods to be ready.
 
@@ -148,9 +156,14 @@ The following button opens up an interactive tutorial showing how to deploy Bank
    ```
    NAME                                  READY   STATUS    RESTARTS   AGE
    accounts-db-6f589464bc-6r7b7          1/1     Running   0          99s
+   ai-meta-db-7c8d9f6b7c-xyz12           1/1     Running   0          99s
+   anomaly-sage-6d7c8f9b7c-abc34         1/1     Running   0          99s
+   transaction-sage-7b8c9d0e1f-def56     1/1     Running   0          99s
+   contact-sage-8c9d0e1f2g-hij78         1/1     Running   0          99s
+   money-sage-9d0e1f2g3h-klm90           1/1     Running   0          99s
+   orchestrator-0e1f2g3h4i-nop12         1/1     Running   0          99s
    balancereader-797bf6d7c5-8xvp6        1/1     Running   0          99s
    contacts-769c4fb556-25pg2             1/1     Running   0          98s
-   conversational-agent-1a2b3c4d5e-6f7g8   1/1     Running   0          98s
    frontend-7c96b54f6b-zkdbz             1/1     Running   0          98s
    ledger-db-5b78474d4f-p6xcb            1/1     Running   0          98s
    ledgerwriter-84bf44b95d-65mqf         1/1     Running   0          97s
