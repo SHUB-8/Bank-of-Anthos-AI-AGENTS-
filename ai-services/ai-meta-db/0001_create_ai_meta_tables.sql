@@ -107,3 +107,21 @@ CREATE TABLE IF NOT EXISTS envelope_correlations (
     transaction_id VARCHAR,
     created_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- 11. exchange_rates (for Orchestrator currency cache)
+CREATE TABLE IF NOT EXISTS exchange_rates (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    currency_code VARCHAR(3) UNIQUE NOT NULL,
+    rate_to_usd NUMERIC(18,8) NOT NULL,
+    last_updated TIMESTAMPTZ DEFAULT now() NOT NULL
+);
+
+-- 12. session_metadata (for Orchestrator session tracking)
+CREATE TABLE IF NOT EXISTS session_metadata (
+    session_id VARCHAR(255) PRIMARY KEY,
+    account_id VARCHAR(50) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+    last_activity TIMESTAMPTZ DEFAULT now() NOT NULL,
+    message_count NUMERIC DEFAULT 0,
+    metadata JSON
+);

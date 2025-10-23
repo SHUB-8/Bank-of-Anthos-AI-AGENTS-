@@ -6,14 +6,17 @@ import httpx
 import logging
 from typing import Optional
 from db import OrchestratorDb
+from config import CONFIG
 
 class CurrencyConverter:
     """Handles currency conversion with smart caching"""
     
     def __init__(self, db: OrchestratorDb):
         self.db = db
-        self.api_url = "https://api.exchangerate-api.com/v4/latest/USD"
-        self.fallback_api_url = "https://api.fxratesapi.com/latest"
+        api_key = CONFIG.to_dict().get('exchange_rate_api_key', None) if hasattr(CONFIG, 'exchange_rate_api_key') else None
+        # v6.exchangerate-api.com endpoint
+        self.api_url = f"https://v6.exchangerate-api.com/v6/{api_key}/latest/USD" if api_key else None
+        self.fallback_api_url = None
         self.timeout = httpx.Timeout(10.0)  # 10 seconds timeout for currency API
         self.logger = logging.getLogger(__name__)
 
@@ -64,12 +67,7 @@ class CurrencyConverter:
             self.db.update_exchange_rate(currency_code, rate)
             return rate
 
-        # Try fallback API
-        self.logger.warning(f"Primary API failed, trying fallback for {currency_code}")
-        rate = await self._fetch_from_fallback_api(currency_code)
-        if rate is not None:
-            self.db.update_exchange_rate(currency_code, rate)
-            return rate
+        # No fallback used now (single reliable API)
 
         # If both APIs fail, try to get any cached rate (even if stale)
         self.logger.error(f"All APIs failed, looking for any cached rate for {currency_code}")
@@ -78,16 +76,19 @@ class CurrencyConverter:
     async def _fetch_from_primary_api(self, currency_code: str) -> Optional[float]:
         """Fetch exchange rate from primary API"""
         try:
+            if not self.api_url:
+                self.logger.error("Exchange rate API key not configured")
+                return None
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.get(self.api_url)
                 response.raise_for_status()
                 data = response.json()
-                
-                rates = data.get("rates", {})
+                # v6 returns { conversion_rates: { USD: 1, EUR: 0.9, ... } }
+                rates = data.get("conversion_rates", {}) or data.get("rates", {})
                 if currency_code in rates:
                     # Convert from USD rate to rate that converts currency to USD
                     usd_to_currency_rate = rates[currency_code]
-                    currency_to_usd_rate = 1 / usd_to_currency_rate
+                    currency_to_usd_rate = 1 / float(usd_to_currency_rate) if float(usd_to_currency_rate) != 0 else None
                     self.logger.info(f"Primary API: {currency_code} to USD rate: {currency_to_usd_rate}")
                     return currency_to_usd_rate
                 else:
@@ -105,34 +106,7 @@ class CurrencyConverter:
             return None
 
     async def _fetch_from_fallback_api(self, currency_code: str) -> Optional[float]:
-        """Fetch exchange rate from fallback API"""
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                # Use base=USD to get rates from USD to other currencies
-                response = await client.get(f"{self.fallback_api_url}?base=USD")
-                response.raise_for_status()
-                data = response.json()
-                
-                rates = data.get("rates", {})
-                if currency_code in rates:
-                    # Convert from USD rate to rate that converts currency to USD
-                    usd_to_currency_rate = rates[currency_code]
-                    currency_to_usd_rate = 1 / usd_to_currency_rate
-                    self.logger.info(f"Fallback API: {currency_code} to USD rate: {currency_to_usd_rate}")
-                    return currency_to_usd_rate
-                else:
-                    self.logger.error(f"Currency {currency_code} not found in fallback API response")
-                    return None
-                    
-        except httpx.HTTPStatusError as e:
-            self.logger.error(f"Fallback currency API HTTP error: {e.response.status_code}")
-            return None
-        except httpx.RequestError as e:
-            self.logger.error(f"Fallback currency API request error: {str(e)}")
-            return None
-        except Exception as e:
-            self.logger.error(f"Fallback currency API unexpected error: {str(e)}")
-            return None
+        return None
 
     def get_supported_currencies(self) -> list:
         """Get list of commonly supported currencies"""

@@ -31,13 +31,23 @@ spec:
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8082
+        envFrom:
+        - configMapRef:
+            name: service-api-config
+        - configMapRef:
+            name: environment-config
         env:
         # --- Gemini API Key ---
         - name: GEMINI_API_KEY
           valueFrom:
             secretKeyRef:
-              name: gemini-api-key-secret
-              key: key
+              name: api-keys-secret
+              key: gadk-api-key
+        - name: EXCHANGE_RATE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: api-keys-secret
+              key: exchange-rate-api-key
         # --- Database URI ---
         - name: AI_META_DB_URI
           value: "postgresql://ai-meta-db:ai-meta-db@ai-meta-db:5432/ai-meta-db"
@@ -45,8 +55,8 @@ spec:
         - name: JWT_PUBLIC_KEY
           valueFrom:
             secretKeyRef:
-              name: jwt-secret
-              key: public_key
+              name: jwt-key-secret
+              key: public-key.pem
         # --- AI Agent Service URLs ---
         - name: CONTACT_SAGE_URL
           value: "http://contact-sage:8083"

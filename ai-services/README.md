@@ -1,5 +1,38 @@
 # Bank of Anthos - AI Services Layer
 
+## Quickstart
+
+Each AI microservice is a standalone Python app with its own `requirements.txt` and `main.py`. The `ai-meta-db/` directory contains a PostgreSQL schema and Dockerfile for local development.
+
+### 1. Install dependencies
+```powershell
+python -m pip install --upgrade pip
+python -m pip install -r .\ai-services\anomaly-sage\requirements.txt
+# Repeat for each service as needed
+```
+
+### 2. Run a service
+```powershell
+python .\ai-services\anomaly-sage\main.py
+```
+
+### 3. Run the AI metadata database locally (optional)
+```powershell
+docker build -t ai-meta-db:local .\ai-services\ai-meta-db
+docker run -e POSTGRES_DB=ai_meta -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -p 5432:5432 ai-meta-db:local
+```
+
+### 4. Run tests
+```powershell
+python -m pip install pytest
+pytest .\ai-services\test_ai_services.py -q
+```
+
+**Notes:**
+- Each service expects environment variables for DB connection: `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`.
+- Tests require a running (or mocked) Postgres instance.
+- See each service's `README.md` or `main.py` for details.
+
 This document provides a comprehensive overview of the AI-powered microservices layer for Bank of Anthos, including architecture, agent responsibilities, API contracts, and the full AI-Meta DB schema.
 
 ## Architecture Overview

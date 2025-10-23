@@ -31,6 +31,8 @@ class ServiceConfig:
     currency_cache_hours: int = 24
     http_timeout_seconds: int = 30
     max_conversation_turns: int = 50
+    local_routing_num: str = "883745000"
+    exchange_rate_api_key: Optional[str] = None
 
     @classmethod
     def from_env(cls) -> 'ServiceConfig':
@@ -68,8 +70,13 @@ class ServiceConfig:
             'SESSION_CLEANUP_DAYS': ('session_cleanup_days', 30),
             'CURRENCY_CACHE_HOURS': ('currency_cache_hours', 24),
             'HTTP_TIMEOUT_SECONDS': ('http_timeout_seconds', 30),
-            'MAX_CONVERSATION_TURNS': ('max_conversation_turns', 50)
+            'MAX_CONVERSATION_TURNS': ('max_conversation_turns', 50),
+            'LOCAL_ROUTING_NUM': ('local_routing_num', "883745000")
         }
+        # Exchange rate API key from secret env if present
+        exchange_key = os.getenv('EXCHANGE_RATE_API_KEY')
+        if exchange_key:
+            config_dict['exchange_rate_api_key'] = exchange_key
         
         for env_var, (config_key, default_value) in optional_vars.items():
             value = os.getenv(env_var, str(default_value))

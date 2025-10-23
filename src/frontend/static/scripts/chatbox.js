@@ -18,7 +18,7 @@ class Chatbox {
     constructor() {
         this.isOpen = false;
         this.isMinimized = false;
-        this.sessionId = this.generateSessionId();
+        this.sessionId = localStorage.getItem('boa_session_id') || this.generateSessionId();
         
         this.initializeElements();
         this.bindEvents();
@@ -110,14 +110,23 @@ class Chatbox {
         const typingId = this.showTypingIndicator();
 
         try {
-            // Send request to backend
-            const response = await fetch('/chat', {
+            // Get JWT token from cookie
+            function getCookie(name) {
+                const value = `; ${document.cookie}`;
+                const parts = value.split(`; ${name}=`);
+                if (parts.length === 2) return parts.pop().split(';').shift();
+                return '';
+            }
+            const jwtToken = getCookie('token');
+            // Send request to orchestrator backend
+            const response = await fetch('/orchestrator/chat', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Authorization': jwtToken ? `Bearer ${jwtToken}` : ''
                 },
                 body: JSON.stringify({
-                    message: message,
+                    query: message,
                     session_id: this.sessionId
                 })
             });
@@ -127,14 +136,20 @@ class Chatbox {
 
             if (response.ok) {
                 const data = await response.json();
-                
+
+                // OTP/suspicious handling
+                if (data.status === 'otp_sent') {
+                    this.addMessage('I\'ve sent a 6-digit OTP to your Notifications. Enter it below to proceed.', 'bot');
+                    window.chatboxShowOtp && window.chatboxShowOtp(data.confirmation_id);
+                    return;
+                }
+                if (data.status === 'blocked') {
+                    this.addMessage(data.message || 'Transaction blocked due to suspected fraud.', 'bot');
+                    return;
+                }
+
                 const botResponse = data.response || data.reply || 'I received your message but couldn\'t generate a response.';
                 this.addMessage(botResponse, 'bot');
-                
-                // Handle action confirmations
-                if (data.requires_confirmation) {
-                    this.addConfirmationButtons(data);
-                }
                 
                 // Show action success/failure feedback
                 if (data.action_taken !== undefined) {
@@ -257,13 +272,22 @@ class Chatbox {
         const typingId = this.showTypingIndicator();
 
         try {
-            const response = await fetch('/chat', {
+            // Get JWT token from cookie
+            function getCookie(name) {
+                const value = `; ${document.cookie}`;
+                const parts = value.split(`; ${name}=`);
+                if (parts.length === 2) return parts.pop().split(';').shift();
+                return '';
+            }
+            const jwtToken = getCookie('token');
+            const response = await fetch('/orchestrator/chat', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Authorization': jwtToken ? `Bearer ${jwtToken}` : ''
                 },
                 body: JSON.stringify({
-                    message: confirmationMessage,
+                    query: confirmationMessage,
                     session_id: this.sessionId,
                     confirmation: confirmed,
                     original_intent: intent

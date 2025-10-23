@@ -15,9 +15,23 @@ If you are using Bank of Anthos, please ★Star this repository to show your int
 
 ## Screenshots
 
+### Dashboard
+![Dashboard](ai-services/dashboard.png)
+
+### Budgets
+![Budgets](ai-services/budgets.png)
+
+### Contacts
+![Contacts](ai-services/contacts.png)
+
+### Transactions
+![Transactions](ai-services/transactions.png)
+
+<!-- Legacy screenshots table (if needed)
 | Sign in                                                                                                        | Home                                                                                                    |
 | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | [![Login](/docs/img/login.png)](/docs/img/login.png) | [![User Transactions](/docs/img/transactions.png)](/docs/img/transactions.png) |
+-->
 
 
 ## Service architecture
@@ -38,6 +52,9 @@ If you are using Bank of Anthos, please ★Star this repository to show your int
 | [ai-meta-db](/ai-services/ai-meta-db)                  | PostgreSQL    | Central AI metadata database for anomaly detection, transaction logging, budget tracking, and user profiles.                               |
 | [anomaly-sage](/ai-services/anomaly-sage)              | Python        | AI microservice for risk analysis and anomaly detection. Logs results to `ai-meta-db`.                                                     |
 | [transaction-sage](/ai-services/transaction-sage)      | Python        | AI microservice for transaction categorization, logging, and budget usage. Logs results to `ai-meta-db`.                                   |
+| [contact-sage](/ai-services/contact-sage)              | Python        | AI microservice for contact inference and enrichment (e.g., identify likely payees / contact suggestions). Logs results to `ai-meta-db`.    |
+| [money-sage](/ai-services/money-sage)                  | Python        | AI microservice for budgeting, spend classification, and money-related insights. Logs results to `ai-meta-db`.                             |
+| [orchestrator](/ai-services/orchestrator)              | Python        | Coordinator service that invokes AI agent microservices, handles auth, and provides shared helpers (currency conversion, config).        |
 
 
 ### AI Agent Microservices
@@ -47,6 +64,37 @@ If you are using Bank of Anthos, please ★Star this repository to show your int
 **transaction-sage**: Categorizes transactions, logs details, and tracks budget usage. It writes to the `transaction_logs` and `budget_usage` tables in `ai-meta-db`.
 
 **ai-meta-db**: Central PostgreSQL database for AI agent microservices. Stores logs, budgets, user profiles, and pending confirmations. See [README-ai-meta-db.md](/ai-services/README-ai-meta-db.md) for schema details.
+
+**contact-sage**: Provides contact-related inference and enrichment for accounts and transactions. Examples: suggest likely payees, normalize contact details, or enrich transaction payee metadata. Writes contact-related events to `ai-meta-db`.
+
+**money-sage**: Focuses on budgeting, spend classification and money-management insights (alerts, monthly summaries). Stores budget and classification outputs in `ai-meta-db`.
+
+**orchestrator**: A small coordinator service used by the AI agents. It contains shared auth helpers (`auth.py`), configuration (`config.py`), currency conversion utilities (`currency_converter.py`), and wiring to call other sage services. It can be used to run or locally emulate agent workflows and exposes its own `main.py` entrypoint.
+
+### Running & testing AI services (local / dev)
+
+Each AI microservice under `ai-services/` is a small Python app with a `main.py` and a `requirements.txt`. The `ai-meta-db/` directory contains a PostgreSQL schema (`0001_create_ai_meta_tables.sql`) and a `Dockerfile` to run the database locally.
+
+Quick steps (PowerShell):
+
+```powershell
+# 1) Install Python dependencies for the services you want to run (example installs orchestrator deps)
+python -m pip install --upgrade pip; python -m pip install -r .\ai-services\orchestrator\requirements.txt
+
+# 2) Run the AI service directly (example: orchestrator)
+python .\ai-services\orchestrator\main.py
+
+# 3) Run the database locally (optional) using the Dockerfile in ai-meta-db, or use your preferred Postgres instance.
+#    Example: docker build -t ai-meta-db:local .\ai-services\ai-meta-db; docker run -p 5432:5432 ai-meta-db:local
+
+# 4) Run the AI services tests from the repo root (requires pytest)
+python -m pip install pytest; pytest .\ai-services\test_ai_services.py -q
+```
+
+Notes:
+- If you prefer to install all AI service deps at once, install each `requirements.txt` found in `ai-services/*/requirements.txt` or use a virtual environment per service.
+- The tests under `ai-services/` are small integration/unit tests for the agent code (see `test_anomaly_sage.py`, `test_contact_sage.py`, `test_money_sage.py`, `test_transaction_sage.py`).
+
 
 ## Interactive quickstart (GKE)
 

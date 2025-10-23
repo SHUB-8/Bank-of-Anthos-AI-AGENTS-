@@ -371,7 +371,7 @@ limitations under the License.
         </div>
       </div>
 
-    <!-- Chatbox -->
+    <!-- Chatbox + OTP + Notifications -->
     <div id="chatbox-container" class="chatbox-container">
       <div id="chatbox-header" class="chatbox-header">
         <span class="chatbox-title">Bank Assistant</span>
@@ -399,11 +399,18 @@ limitations under the License.
       <span class="material-icons">chat</span>
     </div>
 
+    <!-- OTP Prompt -->
+    <div id="otp-container" style="display:none; margin-top:8px;">
+      <input id="otp-input" placeholder="Enter 6-digit OTP" maxlength="6" />
+      <button id="otp-submit" class="btn btn-primary btn-sm">Verify OTP</button>
+    </div>
+
     </main>
 {% include 'shared/footer.html' %}
 {% include 'shared/scripts.html' %}
     <!-- Page specific-->
     <script src="static/scripts/index.js"></script>
     <script src="static/scripts/chatbox.js"></script>
+    <script src="static/scripts/notifications.js"></script>
   </body>
 </html>

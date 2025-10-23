@@ -155,21 +155,39 @@ class SageServices:
                            recipient_id: str, is_external: bool, 
                            auth_header: str) -> Dict[str, Any]:
         """Detect anomalies in a proposed transaction"""
-        url = f"{self.anomaly_sage_url}/v1/detect-anomaly"
+        # Align with anomaly-sage code path (exposes /detect-anomaly)
+        # Try versioned path first; fallback to unversioned for compatibility
         data = {
             "account_id": account_id,
             "amount_cents": amount_cents,
             "recipient_id": recipient_id,
             "is_external": is_external
         }
-        return await self._make_request("POST", url, auth_header, data)
+        # Try /v1/detect-anomaly
+        url_v1 = f"{self.anomaly_sage_url}/v1/detect-anomaly"
+        result = await self._make_request("POST", url_v1, auth_header, data)
+        if result.get("error") and (result.get("status_code") in (404, 405)):
+            # Fallback to unversioned path used by current anomaly-sage implementation
+            url = f"{self.anomaly_sage_url}/detect-anomaly"
+            result = await self._make_request("POST", url, auth_header, data)
+        return result
 
     # Transaction Sage Methods
     async def execute_transaction(self, transaction_data: Dict[str, Any], 
                                 auth_header: str) -> Dict[str, Any]:
         """Execute a transaction after validation"""
+        # Align payload to Transaction-Sage's expected schema
+        mapped_payload = {
+            "account_id": transaction_data.get("fromAccountNum") or transaction_data.get("account_id"),
+            "recipient_id": transaction_data.get("toAccountNum") or transaction_data.get("recipient_id"),
+            "recipient_routing_num": transaction_data.get("toRoutingNum") or transaction_data.get("recipient_routing_num"),
+            "amount_cents": transaction_data.get("amount") or transaction_data.get("amount_cents"),
+            "description": transaction_data.get("description", ""),
+            "is_external": transaction_data.get("is_external", False),
+            "uuid": transaction_data.get("uuid") or transaction_data.get("request_uuid")
+        }
         url = f"{self.transaction_sage_url}/v1/execute-transaction"
-        return await self._make_request("POST", url, auth_header, transaction_data)
+        return await self._make_request("POST", url, auth_header, mapped_payload)
 
     # Health check methods for monitoring
     async def check_service_health(self, auth_header: str) -> Dict[str, Dict[str, Any]]:

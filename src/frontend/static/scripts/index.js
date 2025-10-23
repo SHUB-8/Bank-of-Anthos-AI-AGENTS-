@@ -99,3 +99,34 @@ document.addEventListener("DOMContentLoaded", function(event) {
   }
   RefreshModals();
 });
+
+// === Orchestrator session-id bootstrap ===
+async function boaGetJwt() {
+  // Token is stored as cookie 'token' in this app
+  const value = `; ${document.cookie}`;
+  const parts = value.split(`; token=`);
+  if (parts.length === 2) return parts.pop().split(';').shift();
+  return '';
+}
+
+async function ensureBoaSessionId() {
+  try {
+    if (localStorage.getItem('boa_session_id')) return;
+    const jwt = await boaGetJwt();
+    if (!jwt) return;
+    const res = await fetch('/orchestrator/session-id', {
+      headers: { 'Authorization': `Bearer ${jwt}` }
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data && data.session_id) {
+      localStorage.setItem('boa_session_id', data.session_id);
+    }
+  } catch (e) {
+    // non-fatal
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  ensureBoaSessionId();
+});

@@ -70,7 +70,13 @@ async def get_balance(account_id: str, claims: Dict[str, Any] = Depends(get_curr
         url = f"{BALANCE_READER_URL}/balances/{account_id}"
         resp = await client.get(url, headers=headers)
         resp.raise_for_status()
-        return resp.json()
+        # Core returns cents; present dollars to user
+        cents = resp.json()
+        try:
+            dollars = round((int(cents) / 100.0), 2)
+        except Exception:
+            dollars = cents
+        return {"balance": dollars}
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
 

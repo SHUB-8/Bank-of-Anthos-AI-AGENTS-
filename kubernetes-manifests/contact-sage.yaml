@@ -31,6 +31,9 @@ spec:
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8083
+        envFrom:
+        - configMapRef:
+            name: service-api-config
         env:
         - name: JWT_PUBLIC_KEY
           valueFrom:

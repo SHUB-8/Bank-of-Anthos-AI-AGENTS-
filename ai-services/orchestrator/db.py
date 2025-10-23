@@ -64,6 +64,38 @@ class OrchestratorDb:
             Column("metadata", JSON)  # For storing additional session info
         )
 
+        # Pending confirmations (shared table exists in ai-meta-db; define for ORM usage)
+        self.pending_confirmations_table = Table(
+            "pending_confirmations", self.metadata,
+            Column("confirmation_id", UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
+            Column("account_id", String(10), nullable=False),
+            Column("payload", JSON, nullable=False),
+            Column("requested_at", TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc)),
+            Column("expires_at", TIMESTAMP(timezone=True), nullable=False),
+            Column("status", String, default="pending"),
+            Column("confirmation_method", String)
+        )
+
+        # Notifications table (orchestrator-owned)
+        self.notifications_table = Table(
+            "notifications", self.metadata,
+            Column("id", UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
+            Column("account_id", String(10), index=True, nullable=False),
+            Column("type", String, nullable=False),
+            Column("message", String, nullable=False),
+            Column("metadata", JSON),
+            Column("created_at", TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False),
+            Column("read_at", TIMESTAMP(timezone=True))
+        )
+
+        # User sessions (stable session id per user)
+        self.user_sessions_table = Table(
+            "user_sessions", self.metadata,
+            Column("account_id", String(50), primary_key=True),
+            Column("session_id", String(255), nullable=False),
+            Column("created_at", TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+        )
+
     # === Session and Conversation Management ===
     
     def get_session_history(self, session_id: str) -> List[Dict[str, Any]]:
@@ -353,3 +385,113 @@ class OrchestratorDb:
                 "error": str(e),
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
+
+    # === Notifications Management ===
+    def add_notification(self, account_id: str, message: str, notif_type: str, metadata: Optional[Dict[str, Any]] = None) -> str:
+        try:
+            notif_id = uuid.uuid4()
+            with self.engine.begin() as conn:
+                conn.execute(self.notifications_table.insert().values(
+                    id=notif_id,
+                    account_id=account_id,
+                    type=notif_type,
+                    message=message,
+                    metadata=metadata or {},
+                    created_at=datetime.now(timezone.utc)
+                ))
+            return str(notif_id)
+        except Exception as e:
+            self.logger.error(f"Failed to add notification: {str(e)}")
+            return ""
+
+    def get_notifications(self, account_id: str, include_read: bool = False) -> List[Dict[str, Any]]:
+        try:
+            with self.engine.connect() as conn:
+                query = self.notifications_table.select().where(self.notifications_table.c.account_id == account_id)
+                if not include_read:
+                    query = query.where(self.notifications_table.c.read_at == None)  # noqa: E711
+                query = query.order_by(self.notifications_table.c.created_at.desc())
+                rows = conn.execute(query)
+                return [dict(r._mapping) for r in rows]
+        except Exception as e:
+            self.logger.error(f"Failed to get notifications: {str(e)}")
+            return []
+
+    def mark_notifications_read(self, account_id: str, ids: List[str]) -> int:
+        try:
+            with self.engine.begin() as conn:
+                stmt = self.notifications_table.update().where(
+                    (self.notifications_table.c.account_id == account_id) & (self.notifications_table.c.id.in_([uuid.UUID(i) for i in ids]))
+                ).values(read_at=datetime.now(timezone.utc))
+                result = conn.execute(stmt)
+                return result.rowcount
+        except Exception as e:
+            self.logger.error(f"Failed to mark notifications read: {str(e)}")
+            return 0
+
+    # === OTP / Pending Confirmations ===
+    def create_otp_confirmation(self, account_id: str, payload: Dict[str, Any], ttl_seconds: int = 300) -> Dict[str, Any]:
+        try:
+            confirmation_id = uuid.uuid4()
+            expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+            # augment payload with attempts and otp
+            with self.engine.begin() as conn:
+                conn.execute(self.pending_confirmations_table.insert().values(
+                    confirmation_id=confirmation_id,
+                    account_id=account_id,
+                    payload=payload,
+                    requested_at=datetime.now(timezone.utc),
+                    expires_at=expires_at,
+                    status="pending",
+                    confirmation_method="otp"
+                ))
+            return {"confirmation_id": str(confirmation_id), "expires_at": expires_at.isoformat()}
+        except Exception as e:
+            self.logger.error(f"Failed to create OTP confirmation: {str(e)}")
+            return {}
+
+    def get_confirmation(self, confirmation_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            with self.engine.connect() as conn:
+                row = conn.execute(
+                    self.pending_confirmations_table.select().where(self.pending_confirmations_table.c.confirmation_id == uuid.UUID(confirmation_id))
+                ).first()
+                return dict(row._mapping) if row else None
+        except Exception as e:
+            self.logger.error(f"Failed to get confirmation: {str(e)}")
+            return None
+
+    def update_confirmation_status(self, confirmation_id: str, status: str, payload_updates: Optional[Dict[str, Any]] = None) -> bool:
+        try:
+            with self.engine.begin() as conn:
+                values = {"status": status}
+                if payload_updates is not None:
+                    values["payload"] = payload_updates
+                stmt = self.pending_confirmations_table.update().where(
+                    self.pending_confirmations_table.c.confirmation_id == uuid.UUID(confirmation_id)
+                ).values(**values)
+                conn.execute(stmt)
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to update confirmation status: {str(e)}")
+            return False
+
+    # === Stable Session Id per User ===
+    def get_or_create_user_session(self, account_id: str) -> str:
+        try:
+            with self.engine.begin() as conn:
+                existing = conn.execute(
+                    self.user_sessions_table.select().where(self.user_sessions_table.c.account_id == account_id)
+                ).first()
+                if existing:
+                    return existing.session_id
+                new_session = str(uuid.uuid4())
+                conn.execute(self.user_sessions_table.insert().values(
+                    account_id=account_id,
+                    session_id=new_session,
+                    created_at=datetime.now(timezone.utc)
+                ))
+                return new_session
+        except Exception as e:
+            self.logger.error(f"Failed to get/create user session: {str(e)}")
+            return ""
