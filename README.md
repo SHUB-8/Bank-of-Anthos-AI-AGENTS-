@@ -16,22 +16,16 @@ If you are using Bank of Anthos, please ★Star this repository to show your int
 ## Screenshots
 
 ### Dashboard
-![Dashboard](ai-services/dashboard.png)
+![Dashboard](docs/img/Dashboard.png)
 
 ### Budgets
-![Budgets](ai-services/budgets.png)
+![Budgets](docs/img/Budget-Management.png)
 
 ### Contacts
-![Contacts](ai-services/contacts.png)
+![Contacts](docs/img/Contact-Management.png)
 
 ### Transactions
-![Transactions](ai-services/transactions.png)
-
-<!-- Legacy screenshots table (if needed)
-| Sign in                                                                                                        | Home                                                                                                    |
-| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| [![Login](/docs/img/login.png)](/docs/img/login.png) | [![User Transactions](/docs/img/transactions.png)](/docs/img/transactions.png) |
--->
+![Transactions](docs/img/Transaction-History.png)
 
 
 ## Service architecture
