@@ -9,3 +9,4 @@ SQLAlchemy-Utils
 PyJWT
 python-jose[cryptography]
 opentelemetry-instrumentation-sqlalchemy
+google-generativeai

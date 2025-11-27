@@ -40,6 +40,11 @@ spec:
             secretKeyRef:
               name: jwt-key-secret
               key: public-key.pem
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: api-keys-secret
+              key: GEMINI_API_KEY
         - name: AI_META_DB_URI
           value: "postgresql://ai-meta-db:ai-meta-db@ai-meta-db:5432/ai-meta-db"
         - name: BALANCE_READER_URL
@@ -58,10 +63,10 @@ spec:
             path: /health
             port: 8084
           initialDelaySeconds: 5
-          periodSeconds: 10
+          periodSeconds: 30
         livenessProbe:
           httpGet:
             path: /health
             port: 8084
           initialDelaySeconds: 10
-          periodSeconds: 20
+          periodSeconds: 40

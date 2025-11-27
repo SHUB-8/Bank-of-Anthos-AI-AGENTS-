@@ -8,9 +8,10 @@ Money-Sage is an intelligent FastAPI-based microservice for the Bank of Anthos p
 
 This service acts as a financial analysis layer:
 
--   **Direct Database Access**: It connects to a dedicated `ai-meta-db` to manage user-defined budgets. It is the owner of all budget-related data.
--   **Proxying**: It securely fetches real-time data like transaction history and account balances from the core Bank of Anthos microservices (`transactionhistory` and `balancereader`).
--   **Data Analysis**: It processes transaction data from the core services and compares it against the user's budgets to generate spending summaries, overviews, and actionable saving tips.
+-   **Direct Database Access**: It connects to a dedicated `ai-meta-db` to manage user-defined budgets and retrieve transaction logs for analysis. It is the owner of all budget-related data.
+-   **Proxying**: It securely fetches real-time data like account balances from the core Bank of Anthos microservices (`balancereader`).
+-   **Data Analysis**: It processes transaction logs from ai-meta-db (with category and amount information) and compares them against the user's budgets to generate spending summaries, overviews, and actionable saving tips.
+-   **AI-Powered Tips**: Uses Google Gemini 1.5 Flash to analyze spending patterns by category and generate personalized, actionable saving recommendations.
 
 ---
 
@@ -22,8 +23,8 @@ The service is configured using the following environment variables:
 | :--- | :--- | :--- |
 | `AI_META_DB_URI` | **Required**. The connection URI for the PostgreSQL `ai-meta-db`. | `postgresql://user:pass@ai-meta-db:5432/ai-meta-db` |
 | `JWT_PUBLIC_KEY` | **Required**. The PEM-encoded public key (RS256) used to validate JWTs. | Mounted from a Kubernetes secret. |
+| `GEMINI_API_KEY` | **Optional**. Google Gemini API key for AI-powered tips. Falls back to rule-based tips if not provided. | Mounted from a Kubernetes secret. |
 | `BALANCE_READER_URL` | The internal URL of the core `balancereader` service. | `http://balancereader:8080` |
-| `TRANSACTION_HISTORY_URL`| The internal URL of the core `transactionhistory` service. | `http://transactionhistory:8080` |
 
 ---
 
@@ -55,20 +56,26 @@ All endpoints require a valid JWT `Authorization: Bearer <token>` header, except
 ### 3. Get Transactions
 -   **Method**: `GET`
 -   **Endpoint**: `/transactions/{account_id}`
--   **Description**: Retrieves a list of recent transactions by proxying to the `transactionhistory` service.
+-   **Query Parameters**:
+    -   `limit` (optional): Maximum number of transactions to return (default: 5)
+-   **Description**: Retrieves recent transaction logs from ai-meta-db with category and amount information for spending analysis.
 -   **Success Response (`200 OK`)**:
     ```json
-    [
-      {
-        "transaction_id": "abc-123",
-        "amount": -55.75,
-        "timestamp": "2025-09-20T18:34:25.980Z",
-        "details": {
-          "memo": "Dining",
-          "to_account_num": "..."
+    {
+      "account_id": "7072261198",
+      "count": 10,
+      "limit": 10,
+      "transactions": [
+        {
+          "id": "uuid-here",
+          "transaction_id": 123,
+          "account_id": "7072261198",
+          "amount": 5500,
+          "amount_dollars": 55.00,
+          "category": "Dining"
         }
-      }
-    ]
+      ]
+    }
     ```
 
 ### 4. Budget Management (CRUD)
@@ -175,14 +182,15 @@ All endpoints require a valid JWT `Authorization: Bearer <token>` header, except
 #### Get Saving Tips
 -   **Method**: `GET`
 -   **Endpoint**: `/tips/{account_id}`
--   **Description**: Generates simple, rule-based saving tips based on the budget overview.
+-   **Description**: Generates personalized saving tips using Gemini AI based on transaction_logs spending patterns (category and amount data) and budget comparisons. Falls back to rule-based tips if AI is unavailable.
 -   **Success Response (`200 OK`)**:
     ```json
     {
       "account_id": "7072261198",
       "tips": [
-        "You're close to your budget limit for Groceries ($750.00/$800.00). Be mindful of your next purchases.",
-        "You've gone over your budget for Transport. It's a good time to review your spending in this area."
+        "You've spent $450 on Dining this month (18 transactions, avg $25/transaction). Consider meal prepping 2-3 times per week to reduce this by approximately $150.",
+        "Your Groceries spending of $750 is approaching your $800 budget. You're on track - keep monitoring!",
+        "Consider setting a budget for Transport ($255 spent with no limit set) to better track this expense category."
       ]
     }
     ```

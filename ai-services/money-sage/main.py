@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Header, Depends
 from pydantic import BaseModel, UUID4
 from sqlalchemy.exc import SQLAlchemyError
+import google.generativeai as genai
 
 from auth import get_current_user_claims
 from db import MoneyDb
@@ -26,6 +27,14 @@ logging.basicConfig(
 AI_META_DB_URI = os.getenv("AI_META_DB_URI")
 BALANCE_READER_URL = os.getenv("BALANCE_READER_URL")
 TRANSACTION_HISTORY_URL = os.getenv("TRANSACTION_HISTORY_URL")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# Configure Gemini if API key is available
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    logging.info("Gemini API configured successfully")
+else:
+    logging.warning("GEMINI_API_KEY not set. AI-powered tips will use fallback logic.")
 
 # --- Pydantic Data Models ---
 class BudgetBase(BaseModel):
@@ -50,7 +59,7 @@ class BudgetUpdate(BaseModel):
 # --- FastAPI Application Setup ---
 app = FastAPI(
     title="Money-Sage",
-    version="1.3.1", # Final version
+    version="1.3.1", 
     description="An intelligent financial management service."
 )
 
@@ -81,15 +90,44 @@ async def get_balance(account_id: str, claims: Dict[str, Any] = Depends(get_curr
         raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
 
 @app.get("/transactions/{account_id}")
-async def get_transactions(account_id: str, claims: Dict[str, Any] = Depends(get_current_user_claims), authorization: Optional[str] = Header(None)):
-    headers = {"Authorization": authorization} if authorization else {}
+async def get_transactions(
+    account_id: str, 
+    limit: int = 5,
+    transaction_type: Optional[str] = None,  # Filter: 'debit', 'credit', or None for both
+    anomaly_status: Optional[str] = None,     # Filter: 'normal', 'suspicious', 'fraud', or None for all
+    claims: Dict[str, Any] = Depends(get_current_user_claims)
+):
+    """
+    Get recent transaction logs from ai-meta-db.
+    Returns categorized transactions with amounts, types (debit/credit), and anomaly information.
+    
+    Args:
+        account_id: User's account ID
+        limit: Maximum number of transactions to return (default: 5, returns all if less than limit)
+        transaction_type: Optional filter - 'debit' for sent money, 'credit' for received money
+        anomaly_status: Optional filter - 'normal', 'suspicious', or 'fraud'
+    """
     try:
-        url = f"{TRANSACTION_HISTORY_URL}/transactions/{account_id}"
-        resp = await client.get(url, headers=headers)
-        resp.raise_for_status()
-        return resp.json()
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+        transactions = db.get_transaction_logs(account_id, limit=limit, transaction_type=transaction_type, anomaly_status=anomaly_status)
+        
+        # Convert amounts from cents to dollars for display
+        for txn in transactions:
+            if 'amount' in txn and txn['amount'] is not None:
+                txn['amount_dollars'] = round(txn['amount'] / 100.0, 2)
+        
+        return {
+            "account_id": account_id,
+            "count": len(transactions),
+            "limit": limit,
+            "filters": {
+                "transaction_type": transaction_type,
+                "anomaly_status": anomaly_status
+            },
+            "transactions": transactions
+        }
+    except SQLAlchemyError as e:
+        logging.error(f"Database error fetching transactions: {e}")
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
 @app.post("/budgets/{account_id}", response_model=Budget)
 async def create_budget(account_id: str, budget: BudgetCreate, claims: Dict[str, Any] = Depends(get_current_user_claims)):
@@ -133,7 +171,6 @@ async def delete_budget(account_id: str, category: str, claims: Dict[str, Any] =
     except SQLAlchemyError as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
-# THIS ENDPOINT IS NOW RESTORED
 @app.get("/summary/{account_id}")
 async def get_summary(account_id: str, claims: Dict[str, Any] = Depends(get_current_user_claims)):
     try:
@@ -179,23 +216,169 @@ async def get_overview(account_id: str, claims: Dict[str, Any] = Depends(get_cur
     except SQLAlchemyError as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
-# THIS ENDPOINT IS NOW RESTORED
 @app.get("/tips/{account_id}")
 async def get_saving_tips(account_id: str, claims: Dict[str, Any] = Depends(get_current_user_claims)):
+    """Generate personalized saving tips using AI based on transaction logs and budgets."""
     tips = []
     try:
+        # Get budget overview
         overview_data = await get_overview(account_id, claims)
         overview = overview_data.get("overview", {})
-        for category, data in overview.items():
-            if data.get("status") == "over_budget":
-                tips.append(f"You've gone over your budget for {category}. It's a good time to review your spending in this area.")
-            elif data.get("status") == "at_risk":
-                tips.append(f"You're close to your budget limit for {category} (${data['spent']}/${data['limit']}). Be mindful of your next purchases.")
+        
+        # Get transaction logs for detailed spending analysis
+        transaction_logs = db.get_transaction_logs(account_id, limit=20)
+        
+        # Prepare context for AI
+        if GEMINI_API_KEY and (overview or transaction_logs):
+            # Aggregate spending by category from transaction logs
+            spending_by_category = {}
+            transaction_count_by_category = {}
+            
+            for txn in transaction_logs:
+                category = txn.get("category", "Miscellaneous")
+                amount = txn.get("amount", 0) / 100.0  # Convert cents to dollars
+                
+                if category in spending_by_category:
+                    spending_by_category[category] += amount
+                    transaction_count_by_category[category] += 1
+                else:
+                    spending_by_category[category] = amount
+                    transaction_count_by_category[category] = 1
+            
+            # Call Gemini for personalized tips
+            try:
+                model = genai.GenerativeModel('models/gemini-2.5-flash')
+                
+                prompt = f"""You are a helpful financial advisor for a banking app. Based on the user's transaction history and budgets, provide 3-5 personalized, actionable saving tips.
+
+Transaction History Analysis (Last {len(transaction_logs)} transactions):
+{format_transaction_analysis(spending_by_category, transaction_count_by_category)}
+
+Budget Overview:
+{format_budget_context(overview)}
+
+Guidelines:
+1. Be specific and actionable - reference actual categories and amounts
+2. Provide realistic suggestions based on spending patterns
+3. Be encouraging and positive in tone
+4. Focus on categories with highest spending or budget concerns
+5. Keep each tip to 1-2 sentences
+6. Include specific dollar amounts when relevant
+
+Return ONLY a JSON array of tip strings, nothing else. Example format:
+["Tip 1 text here", "Tip 2 text here", "Tip 3 text here"]"""
+
+                response = model.generate_content(prompt)
+                
+                # Try to parse JSON response
+                import json
+                try:
+                    # Try to extract JSON from response
+                    response_text = response.text.strip()
+                    # Remove markdown code blocks if present
+                    if response_text.startswith('```'):
+                        response_text = response_text.split('```')[1]
+                        if response_text.startswith('json'):
+                            response_text = response_text[4:]
+                        response_text = response_text.strip()
+                    
+                    tips = json.loads(response_text)
+                    if not isinstance(tips, list):
+                        tips = [response.text]
+                except json.JSONDecodeError:
+                    # If not valid JSON, split by newlines and clean
+                    tips = [line.strip() for line in response.text.split('\n') if line.strip()]
+                    # Remove list markers and quotes
+                    tips = [tip.strip('- ').strip('"').strip('•').strip() for tip in tips if tip and not tip.strip() in ['[', ']', '```', '```json']]
+                
+                # Filter out empty tips
+                tips = [tip for tip in tips if tip and len(tip) > 10]
+                
+            except Exception as e:
+                logging.error(f"Error generating AI tips: {e}")
+                # Fallback to rule-based tips
+                tips = generate_rule_based_tips(overview, spending_by_category)
+        else:
+            # Fallback to rule-based tips
+            spending_by_category = {}
+            for txn in transaction_logs:
+                category = txn.get("category", "Miscellaneous")
+                amount = txn.get("amount", 0) / 100.0
+                spending_by_category[category] = spending_by_category.get(category, 0) + amount
+            
+            tips = generate_rule_based_tips(overview, spending_by_category)
         
         if not tips:
-            tips.append("You're doing a great job staying on track with all your budgets!")
+            tips.append("You're doing a great job managing your finances! Keep tracking your spending to find more ways to save.")
         
-        return {"account_id": account_id, "tips": tips}
+        return {"account_id": account_id, "tips": tips[:5]}  # Limit to 5 tips
     except Exception as e:
         logging.error(f"Error generating tips: {e}")
-        return {"account_id": account_id, "tips": ["Could not generate tips at this time."]}
+        return {
+            "account_id": account_id, 
+            "tips": ["Unable to generate tips at this time. Please check your budget settings and transaction history."]
+        }
+
+def format_transaction_analysis(spending_by_category: dict, transaction_count: dict) -> str:
+    """Format transaction spending analysis for AI prompt."""
+    if not spending_by_category:
+        return "No recent transactions found"
+    
+    lines = []
+    # Sort by spending amount (highest first)
+    sorted_spending = sorted(spending_by_category.items(), key=lambda x: x[1], reverse=True)
+    
+    for category, amount in sorted_spending:
+        count = transaction_count.get(category, 0)
+        avg_per_transaction = amount / count if count > 0 else 0
+        lines.append(f"- {category}: ${amount:.2f} total ({count} transactions, avg ${avg_per_transaction:.2f} per transaction)")
+    
+    return "\n".join(lines)
+
+def format_budget_context(overview: dict) -> str:
+    """Format budget overview for AI prompt."""
+    if not overview:
+        return "No budgets set"
+    
+    lines = []
+    for category, data in overview.items():
+        limit = data.get("limit", 0)
+        spent = data.get("spent", 0)
+        remaining = data.get("remaining", 0)
+        status = data.get("status", "unknown")
+        percentage = (spent / limit * 100) if limit > 0 else 0
+        lines.append(f"- {category}: ${spent:.2f} / ${limit} ({percentage:.0f}% used, {status})")
+    return "\n".join(lines)
+
+def generate_rule_based_tips(overview: dict, spending_by_category: dict = None) -> List[str]:
+    """Generate rule-based tips as fallback when AI is not available."""
+    tips = []
+    
+    # Tips based on budget overview
+    for category, data in overview.items():
+        status = data.get("status")
+        spent = data.get("spent", 0)
+        limit = data.get("limit", 0)
+        remaining = data.get("remaining", 0)
+        
+        if status == "over_budget":
+            tips.append(f"You've exceeded your {category} budget by ${abs(remaining):.2f}. Consider reviewing your spending in this area and adjusting your budget if needed.")
+        elif status == "at_risk":
+            percentage = (spent / limit * 100) if limit > 0 else 0
+            tips.append(f"You've used {percentage:.0f}% of your {category} budget (${spent:.2f}/${limit}). Try to limit spending in this category for the rest of the period.")
+    
+    # Tips based on spending patterns
+    if spending_by_category:
+        sorted_spending = sorted(spending_by_category.items(), key=lambda x: x[1], reverse=True)
+        if len(sorted_spending) > 0:
+            top_category, top_amount = sorted_spending[0]
+            if top_amount > 100:  # Only suggest if significant spending
+                tips.append(f"Your highest spending is in {top_category} (${top_amount:.2f}). Consider setting a budget for this category to better track your expenses.")
+    
+    if not tips:
+        if overview:
+            tips.append("Great job! You're on track with your budgets. Keep monitoring your spending to maintain good financial health.")
+        else:
+            tips.append("Start by creating budgets for your common spending categories to track your expenses better and identify saving opportunities.")
+    
+    return tips
