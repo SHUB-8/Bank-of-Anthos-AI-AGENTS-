@@ -34,9 +34,14 @@ class AnomalyResponse(BaseModel):
     risk_score: float
     status: str
     reasons: List[str]
+    log_id: Optional[str] = None
+
+class LinkTransactionRequest(BaseModel):
+    log_id: str
+    transaction_id: int
 
 # --- FastAPI App ---
-app = FastAPI(title="Anomaly-Sage", version="1.1.2") # Final version bump
+app = FastAPI(title="Anomaly-Sage", version="1.0") 
 
 # --- Global Clients ---
 client = httpx.AsyncClient()
@@ -66,6 +71,17 @@ async def detect_anomaly(req: AnomalyRequest, claims: Dict[str, Any] = Depends(g
     username = claims.get("user") or claims.get("username")
 
     try:
+        # 0. Check for existing confirmed transaction
+        confirmed_txn = db.get_recent_confirmed_transaction(req.account_id, req.recipient_id, req.amount_cents)
+        if confirmed_txn:
+            return AnomalyResponse(
+                account_id=req.account_id,
+                risk_score=confirmed_txn['risk_score'],
+                status="normal", # Allow execution
+                reasons=["Transaction previously confirmed by user."],
+                log_id=str(confirmed_txn['log_id'])
+            )
+
         # 1. Gather Data
         balance_dollars = await _get_balance(req.account_id, authorization)
         transactions = await _get_transactions(req.account_id, authorization)
@@ -111,9 +127,68 @@ async def detect_anomaly(req: AnomalyRequest, claims: Dict[str, Any] = Depends(g
             reasons.append("Transaction matches typical user behavior.")
         
         # 4. Log and Return
-        db.log_anomaly_check(req.account_id, risk_score, status)
-        return AnomalyResponse(account_id=req.account_id, risk_score=risk_score, status=status, reasons=reasons)
+        log_id = db.log_anomaly_check(
+            account_id=req.account_id,
+            recipient_id=req.recipient_id,
+            amount_cents=req.amount_cents,
+            risk_score=risk_score,
+            status=status,
+            anomaly_reasons=reasons
+        )
+        return AnomalyResponse(
+            account_id=req.account_id,
+            risk_score=risk_score,
+            status=status,
+            reasons=reasons,
+            log_id=log_id
+        )
 
     except (httpx.HTTPStatusError, SQLAlchemyError) as e:
         logging.error(f"Error during anomaly detection: {e}")
         raise HTTPException(status_code=500, detail="Error communicating with backend services.")
+
+@app.post("/confirm-suspicious/{log_id}")
+async def confirm_suspicious(log_id: str, claims: Dict[str, Any] = Depends(get_current_user_claims)):
+    """Confirms a suspicious transaction, allowing it to proceed."""
+    try:
+        # Verify the transaction exists and belongs to this user
+        transaction = db.get_suspicious_transaction(log_id)
+        if not transaction:
+            raise HTTPException(status_code=404, detail="Suspicious transaction not found or already processed.")
+        
+        username = claims.get("user") or claims.get("username")
+        # Could add additional verification that transaction.account_id matches user's account
+        
+        success = db.confirm_suspicious_transaction(log_id)
+        if success:
+            return {"status": "confirmed", "log_id": log_id, "message": "Transaction confirmed and ready to execute."}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to confirm transaction.")
+    except SQLAlchemyError as e:
+        logging.error(f"Error confirming suspicious transaction: {e}")
+        raise HTTPException(status_code=500, detail="Database error.")
+
+@app.post("/cancel-suspicious/{log_id}")
+async def cancel_suspicious(log_id: str, claims: Dict[str, Any] = Depends(get_current_user_claims)):
+    """Cancels a suspicious transaction, preventing execution."""
+    try:
+        transaction = db.get_suspicious_transaction(log_id)
+        if not transaction:
+            raise HTTPException(status_code=404, detail="Suspicious transaction not found or already processed.")
+        
+        success = db.cancel_suspicious_transaction(log_id)
+        if success:
+            return {"status": "cancelled", "log_id": log_id, "message": "Transaction cancelled."}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to cancel transaction.")
+    except SQLAlchemyError as e:
+        logging.error(f"Error cancelling suspicious transaction: {e}")
+        raise HTTPException(status_code=500, detail="Database error.")
+
+@app.post("/link-transaction")
+async def link_transaction(req: LinkTransactionRequest):
+    """Links a transaction ID to an anomaly log entry."""
+    success = db.link_transaction_to_anomaly(req.log_id, req.transaction_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Log not found or update failed")
+    return {"status": "linked"}

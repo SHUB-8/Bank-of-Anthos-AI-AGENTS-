@@ -33,8 +33,15 @@ class AnomalyDb:
                 Column("log_id", UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
                 Column("transaction_id", BIGINT),
                 Column("account_id", String(10), nullable=False),
-                Column("risk_score", Float),
-                Column("status", String),
+                Column("recipient_id", String(10)),
+                Column("amount_cents", Integer, nullable=False),
+                Column("risk_score", Float, nullable=False),
+                Column("status", String(20), nullable=False),
+                Column("anomaly_reasons", ARRAY(String)),
+                Column("requested_at", TIMESTAMP(timezone=True), server_default=func.now()),
+                Column("confirmed_at", TIMESTAMP(timezone=True)),
+                Column("expires_at", TIMESTAMP(timezone=True)),
+                Column("created_at", TIMESTAMP(timezone=False), server_default=func.now())
             )
             self.contacts_table = Table(
                 "contacts", accounts_metadata,
@@ -93,15 +100,153 @@ class AnomalyDb:
             self.logger.error(f"Failed to check contacts in accounts-db: {e}")
             return False
 
-    def log_anomaly_check(self, account_id, risk_score, status):
+    def log_anomaly_check(self, account_id, recipient_id, amount_cents, risk_score, status, anomaly_reasons, transaction_id=None):
         """Logs the result of an anomaly check."""
         try:
-            statement = self.anomaly_logs_table.insert().values(
-                log_id=uuid.uuid4(), account_id=account_id,
-                risk_score=risk_score, status=status
-            )
+            log_id = uuid.uuid4()
+            values = {
+                "log_id": log_id,
+                "transaction_id": transaction_id,
+                "account_id": account_id,
+                "recipient_id": recipient_id,
+                "amount_cents": amount_cents,
+                "risk_score": risk_score,
+                "status": status,
+                "anomaly_reasons": anomaly_reasons
+            }
+            
+            # For suspicious transactions, set expiry time (e.g., 24 hours from now)
+            if status == "suspicious":
+                from datetime import datetime, timedelta
+                values["expires_at"] = datetime.utcnow() + timedelta(hours=24)
+            
+            statement = self.anomaly_logs_table.insert().values(**values)
             with self.meta_engine.connect() as conn:
                 conn.execute(statement)
                 conn.commit()
+            
+            return str(log_id)
         except SQLAlchemyError as e:
             self.logger.error(f"Failed to log anomaly check: {e}")
+            return None
+    
+    def confirm_suspicious_transaction(self, log_id):
+        """Updates a suspicious transaction to confirmed status."""
+        try:
+            from datetime import datetime
+            statement = (
+                self.anomaly_logs_table.update()
+                .where(self.anomaly_logs_table.c.log_id == uuid.UUID(log_id))
+                .values(status="confirmed", confirmed_at=datetime.utcnow())
+            )
+            with self.meta_engine.connect() as conn:
+                result = conn.execute(statement)
+                conn.commit()
+                return result.rowcount > 0
+        except SQLAlchemyError as e:
+            self.logger.error(f"Failed to confirm suspicious transaction: {e}")
+            return False
+    
+    def cancel_suspicious_transaction(self, log_id):
+        """Updates a suspicious transaction to cancelled status."""
+        try:
+            statement = (
+                self.anomaly_logs_table.update()
+                .where(self.anomaly_logs_table.c.log_id == uuid.UUID(log_id))
+                .values(status="cancelled")
+            )
+            with self.meta_engine.connect() as conn:
+                result = conn.execute(statement)
+                conn.commit()
+                return result.rowcount > 0
+        except SQLAlchemyError as e:
+            self.logger.error(f"Failed to cancel suspicious transaction: {e}")
+            return False
+    
+    def get_suspicious_transaction(self, log_id):
+        """Retrieves a suspicious transaction by log_id."""
+        try:
+            query = (
+                self.anomaly_logs_table.select()
+                .where(
+                    and_(
+                        self.anomaly_logs_table.c.log_id == uuid.UUID(log_id),
+                        self.anomaly_logs_table.c.status == "suspicious"
+                    )
+                )
+            )
+            with self.meta_engine.connect() as conn:
+                result = conn.execute(query).first()
+                if result:
+                    return dict(result._mapping)
+                return None
+        except SQLAlchemyError as e:
+            self.logger.error(f"Failed to get suspicious transaction: {e}")
+            return None
+    
+    def get_recent_confirmed_transaction(self, account_id, recipient_id, amount_cents, minutes=15):
+        """Checks for a recently confirmed transaction matching the details."""
+        try:
+            from datetime import datetime, timedelta
+            cutoff_time = datetime.utcnow() - timedelta(minutes=minutes)
+            
+            query = (
+                self.anomaly_logs_table.select()
+                .where(
+                    and_(
+                        self.anomaly_logs_table.c.account_id == account_id,
+                        self.anomaly_logs_table.c.recipient_id == recipient_id,
+                        self.anomaly_logs_table.c.amount_cents == amount_cents,
+                        self.anomaly_logs_table.c.status == "confirmed",
+                        self.anomaly_logs_table.c.confirmed_at >= cutoff_time,
+                        self.anomaly_logs_table.c.transaction_id == None  # Ensure it hasn't been executed yet
+                    )
+                )
+                .order_by(self.anomaly_logs_table.c.confirmed_at.desc())
+            )
+            with self.meta_engine.connect() as conn:
+                result = conn.execute(query).first()
+                if result:
+                    return dict(result._mapping)
+                return None
+        except SQLAlchemyError as e:
+            self.logger.error(f"Failed to check for recent confirmed transaction: {e}")
+            return None
+
+    def expire_old_suspicious_transactions(self):
+        """Updates expired suspicious transactions to expired status."""
+        try:
+            from datetime import datetime
+            statement = (
+                self.anomaly_logs_table.update()
+                .where(
+                    and_(
+                        self.anomaly_logs_table.c.status == "suspicious",
+                        self.anomaly_logs_table.c.expires_at < datetime.utcnow()
+                    )
+                )
+                .values(status="expired")
+            )
+            with self.meta_engine.connect() as conn:
+                result = conn.execute(statement)
+                conn.commit()
+                return result.rowcount
+        except SQLAlchemyError as e:
+            self.logger.error(f"Failed to expire old suspicious transactions: {e}")
+            return 0
+    
+    def link_transaction_to_anomaly(self, log_id, transaction_id):
+        """Links a transaction_id to an anomaly log."""
+        try:
+            statement = (
+                self.anomaly_logs_table.update()
+                .where(self.anomaly_logs_table.c.log_id == uuid.UUID(log_id))
+                .values(transaction_id=transaction_id)
+            )
+            with self.meta_engine.connect() as conn:
+                result = conn.execute(statement)
+                conn.commit()
+                return result.rowcount > 0
+        except SQLAlchemyError as e:
+            self.logger.error(f"Failed to link transaction to anomaly: {e}")
+            return False
