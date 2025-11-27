@@ -1,25 +1,50 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- Tables for Anomaly-Sage & Transaction-Sage
--- 1. anomaly_logs
+
+-- 1. anomaly_logs (Primary source for all anomaly detection results)
 CREATE TABLE IF NOT EXISTS anomaly_logs (
     log_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    transaction_id BIGINT,
+    transaction_id BIGINT,                          -- NULL for fraud/pending, populated after transaction executes
     account_id CHARACTER(10) NOT NULL,
-    risk_score FLOAT,
-    status VARCHAR,
+    recipient_id CHARACTER(10),
+    amount_cents INTEGER NOT NULL,
+    risk_score FLOAT NOT NULL,
+    status VARCHAR(20) NOT NULL CHECK (status IN ('normal', 'suspicious', 'fraud', 'pending', 'confirmed', 'expired', 'cancelled')),
+    anomaly_reasons TEXT[],                         -- Array of reason strings
+    requested_at TIMESTAMPTZ DEFAULT now(),
+    confirmed_at TIMESTAMPTZ,                       -- When user confirmed (for suspicious)
+    expires_at TIMESTAMPTZ,                         -- TTL for confirmation (for suspicious)
     created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now()
 );
 
--- 2. transaction_logs
+-- Indexes for anomaly_logs
+CREATE INDEX IF NOT EXISTS idx_anomaly_logs_account_id ON anomaly_logs(account_id);
+CREATE INDEX IF NOT EXISTS idx_anomaly_logs_status ON anomaly_logs(status);
+CREATE INDEX IF NOT EXISTS idx_anomaly_logs_transaction_id ON anomaly_logs(transaction_id);
+CREATE INDEX IF NOT EXISTS idx_anomaly_logs_created_at ON anomaly_logs(created_at DESC);
+
+-- 2. transaction_logs (Enhanced for credit/debit tracking with anomaly reference)
 CREATE TABLE IF NOT EXISTS transaction_logs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    transaction_id BIGINT,
-    account_id CHARACTER(10) NOT NULL,
-    amount INTEGER NOT NULL,
-    category VARCHAR,
-    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now()
+    transaction_id BIGINT NOT NULL,                 -- From ledger-db
+    anomaly_log_id UUID,                            -- Reference to anomaly_logs for risk details
+    account_id CHARACTER(10) NOT NULL,              -- Sender's account (for debit) or receiver's account (for credit)
+    receiver_account_id CHARACTER(10),              -- Receiver's account (NULL for external transfers)
+    amount INTEGER NOT NULL,                        -- Amount in cents (always positive)
+    transaction_type VARCHAR(10) CHECK (transaction_type IN ('debit', 'credit')), -- Perspective: debit=sent, credit=received
+    category VARCHAR,                               -- Spending category (Dining, Transport, etc.)
+    description TEXT,                               -- Transaction description/memo
+    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
+    FOREIGN KEY (anomaly_log_id) REFERENCES anomaly_logs(log_id) ON DELETE SET NULL
 );
+
+-- Indexes for efficient querying
+CREATE INDEX IF NOT EXISTS idx_transaction_logs_account_id ON transaction_logs(account_id);
+CREATE INDEX IF NOT EXISTS idx_transaction_logs_receiver_account_id ON transaction_logs(receiver_account_id);
+CREATE INDEX IF NOT EXISTS idx_transaction_logs_transaction_id ON transaction_logs(transaction_id);
+CREATE INDEX IF NOT EXISTS idx_transaction_logs_anomaly_log_id ON transaction_logs(anomaly_log_id);
+CREATE INDEX IF NOT EXISTS idx_transaction_logs_created_at ON transaction_logs(created_at DESC);
 
 -- 3. budgets
 CREATE TABLE IF NOT EXISTS budgets (
@@ -55,18 +80,7 @@ CREATE TABLE IF NOT EXISTS user_profiles (
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- 6. pending_confirmations
-CREATE TABLE IF NOT EXISTS pending_confirmations (
-    confirmation_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    account_id CHARACTER(10) NOT NULL,
-    payload JSONB NOT NULL,
-    requested_at TIMESTAMPTZ DEFAULT now(),
-    expires_at TIMESTAMPTZ NOT NULL,
-    status TEXT CHECK (status IN ('pending','confirmed','expired','cancelled')) DEFAULT 'pending',
-    confirmation_method TEXT
-);
-
--- 7. idempotency_keys (for Transaction-Sage)
+-- 6. idempotency_keys (for Transaction-Sage)
 CREATE TABLE IF NOT EXISTS idempotency_keys (
     key VARCHAR(255) PRIMARY KEY,
     account_id CHARACTER(10) NOT NULL,
@@ -77,7 +91,7 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
 
 
 -- Tables for Orchestrator
--- 8. llm_envelopes
+-- 7. llm_envelopes
 CREATE TABLE IF NOT EXISTS llm_envelopes (
     envelope_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     session_id VARCHAR,
@@ -88,7 +102,7 @@ CREATE TABLE IF NOT EXISTS llm_envelopes (
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- 9. agent_memory
+-- 8. agent_memory
 CREATE TABLE IF NOT EXISTS agent_memory (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     session_id VARCHAR NOT NULL,
@@ -98,7 +112,7 @@ CREATE TABLE IF NOT EXISTS agent_memory (
     expires_at TIMESTAMPTZ
 );
 
--- 10. envelope_correlations
+-- 9. envelope_correlations
 CREATE TABLE IF NOT EXISTS envelope_correlations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     envelope_id UUID NOT NULL,
@@ -108,7 +122,7 @@ CREATE TABLE IF NOT EXISTS envelope_correlations (
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- 11. exchange_rates (for Orchestrator currency cache)
+-- 10. exchange_rates (for Orchestrator currency cache)
 CREATE TABLE IF NOT EXISTS exchange_rates (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     currency_code VARCHAR(3) UNIQUE NOT NULL,
@@ -116,7 +130,7 @@ CREATE TABLE IF NOT EXISTS exchange_rates (
     last_updated TIMESTAMPTZ DEFAULT now() NOT NULL
 );
 
--- 12. session_metadata (for Orchestrator session tracking)
+-- 11. session_metadata (for Orchestrator session tracking)
 CREATE TABLE IF NOT EXISTS session_metadata (
     session_id VARCHAR(255) PRIMARY KEY,
     account_id VARCHAR(50) NOT NULL,

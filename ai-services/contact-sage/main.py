@@ -1,8 +1,7 @@
-# contact-sage/main.py
 """
 Contact-Sage Service (FastAPI)
 
-This service provides an enhanced API for managing user contacts.
+This service provides an enhanced APIs for managing user contacts.
 It acts as a smart proxy and a direct database interface, offering features
 like fuzzy contact resolution, and direct updates/deletions.
 """
@@ -60,7 +59,7 @@ class ContactResolveResponse(BaseModel):
 # --- FastAPI Application Setup ---
 app = FastAPI(
     title="Contact-Sage",
-    version="1.2.0", # Bump version for new feature
+    version="1.0",
     description="An intelligent contact management service for the Bank of Anthos platform."
 )
 
@@ -101,7 +100,8 @@ async def resolve_contact(req: ContactResolvePayload = Body(...), claims: Dict[s
             return ContactResolveResponse(status="not_found")
         contact_labels = {c.get("label"): c.get("account_num") for c in contacts}
         best_match = process.extractOne(req.recipient, contact_labels.keys())
-        if best_match and best_match[1] > 90:
+        logging.info(f"Fuzzy match result for '{req.recipient}': {best_match}")
+        if best_match and best_match[1] >= 80:  # Lowered threshold from >90 to >=80 for better matching
             return ContactResolveResponse(
                 status="success",
                 account_id=contact_labels[best_match[0]],
@@ -154,6 +154,8 @@ async def update_contact(account_id: str, contact_label: str, contact: Contact, 
         if updated_count == 0:
              raise HTTPException(status_code=404, detail="Contact not found or no changes were made.")
         return {"status": "updated", "updated_label": contact.label}
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions directly.
     except SQLAlchemyError as e:
         logging.error(f"Database error during contact update: {e}")
         raise HTTPException(status_code=500, detail="A database error occurred.")
