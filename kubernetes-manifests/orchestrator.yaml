@@ -42,7 +42,7 @@ spec:
           valueFrom:
             secretKeyRef:
               name: api-keys-secret
-              key: gadk-api-key
+              key: GEMINI_API_KEY
         - name: EXCHANGE_RATE_API_KEY
           valueFrom:
             secretKeyRef:

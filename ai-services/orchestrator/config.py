@@ -14,7 +14,7 @@ class ServiceConfig:
     """Configuration class for orchestrator service"""
     
     # Required configurations
-    gemini_api_key: str
+    GEMINI_API_KEY: str
     ai_meta_db_uri: str
     jwt_public_key: str
     
@@ -40,7 +40,7 @@ class ServiceConfig:
         
         # Required environment variables
         required_vars = {
-            'GEMINI_API_KEY': 'gemini_api_key',
+            'GEMINI_API_KEY': 'GEMINI_API_KEY',
             'AI_META_DB_URI': 'ai_meta_db_uri',
             'JWT_PUBLIC_KEY': 'jwt_public_key'
         }
@@ -149,7 +149,7 @@ class ServiceConfig:
     def to_dict(self, mask_secrets: bool = True) -> Dict[str, Any]:
         """Convert configuration to dictionary, optionally masking secrets"""
         config_dict = {
-            'gemini_api_key': '***masked***' if mask_secrets else self.gemini_api_key,
+            'GEMINI_API_KEY': '***masked***' if mask_secrets else self.GEMINI_API_KEY,
             'ai_meta_db_uri': self._mask_db_uri(self.ai_meta_db_uri) if mask_secrets else self.ai_meta_db_uri,
             'jwt_public_key': '***masked***' if mask_secrets else self.jwt_public_key,
             'contact_sage_url': self.contact_sage_url,

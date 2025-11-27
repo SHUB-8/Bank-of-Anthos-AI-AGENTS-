@@ -1,4 +1,3 @@
-# main.py
 import logging
 import json
 import uuid
@@ -8,6 +7,7 @@ from datetime import datetime
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, Header
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import google.generativeai as genai
 from google.generativeai.types import FunctionDeclaration, Tool
@@ -19,6 +19,7 @@ from db import OrchestratorDb
 from currency_converter import CurrencyConverter
 from services import SageServices
 from config import CONFIG
+from tools import create_gemini_tools, execute_tool_call
 
 # --- Logging Configuration ---
 logging.basicConfig(
@@ -28,7 +29,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Configure Gemini ---
-genai.configure(api_key=CONFIG.gemini_api_key)
+genai.configure(api_key=CONFIG.GEMINI_API_KEY)
 
 # --- Pydantic Models ---
 class ChatRequest(BaseModel):
@@ -138,431 +139,6 @@ currency_converter: CurrencyConverter = None
 session_cache: TTLCache = None
 sage_services: SageServices = None
 
-# --- Tool Definitions for Gemini ---
-def create_gemini_tools():
-    """Create tool definitions for Gemini to call our sage services"""
-    
-    # Contact Management Tools
-    get_contacts_tool = FunctionDeclaration(
-        name="get_contacts",
-        description="Get all contacts for a user account",
-        parameters={
-            "type": "object",
-            "properties": {
-                "account_id": {
-                    "type": "string",
-                    "description": "The user's account ID"
-                }
-            },
-            "required": ["account_id"]
-        }
-    )
-    
-    add_contact_tool = FunctionDeclaration(
-        name="add_contact",
-        description="Add a new contact for sending money",
-        parameters={
-            "type": "object",
-            "properties": {
-                "account_id": {"type": "string", "description": "The user's account ID"},
-                "label": {"type": "string", "description": "Contact name/label"},
-                "contact_account_num": {"type": "string", "description": "Contact's account number"},
-                "routing_num": {"type": "string", "description": "Contact's routing number"},
-                "is_external": {"type": "boolean", "description": "Whether contact is external to the bank"}
-            },
-            "required": ["account_id", "label", "contact_account_num", "routing_num", "is_external"]
-        }
-    )
-    
-    update_contact_tool = FunctionDeclaration(
-        name="update_contact",
-        description="Update an existing contact's details",
-        parameters={
-            "type": "object",
-            "properties": {
-                "account_id": {"type": "string", "description": "The user's account ID"},
-                "contact_label": {"type": "string", "description": "Existing contact label to update"},
-                "label": {"type": "string", "description": "New label"},
-                "contact_account_num": {"type": "string", "description": "Contact's account number"},
-                "routing_num": {"type": "string", "description": "Contact's routing number"},
-                "is_external": {"type": "boolean", "description": "External contact flag"}
-            },
-            "required": ["account_id", "contact_label", "label", "contact_account_num", "routing_num", "is_external"]
-        }
-    )
-
-    delete_contact_tool = FunctionDeclaration(
-        name="delete_contact",
-        description="Delete a contact by label",
-        parameters={
-            "type": "object",
-            "properties": {
-                "account_id": {"type": "string", "description": "The user's account ID"},
-                "contact_label": {"type": "string", "description": "Contact label to delete"}
-            },
-            "required": ["account_id", "contact_label"]
-        }
-    )
-
-    resolve_contact_tool = FunctionDeclaration(
-        name="resolve_contact",
-        description="Find a contact's account number by name (fuzzy search)",
-        parameters={
-            "type": "object",
-            "properties": {
-                "account_id": {"type": "string", "description": "The user's account ID"},
-                "recipient_name": {"type": "string", "description": "The name to search for"}
-            },
-            "required": ["account_id", "recipient_name"]
-        }
-    )
-    
-    # Financial Information Tools
-    get_balance_tool = FunctionDeclaration(
-        name="get_balance",
-        description="Get the current account balance",
-        parameters={
-            "type": "object",
-            "properties": {
-                "account_id": {"type": "string", "description": "The user's account ID"}
-            },
-            "required": ["account_id"]
-        }
-    )
-    
-    get_transactions_tool = FunctionDeclaration(
-        name="get_transactions",
-        description="Get recent transaction history",
-        parameters={
-            "type": "object",
-            "properties": {
-                "account_id": {"type": "string", "description": "The user's account ID"}
-            },
-            "required": ["account_id"]
-        }
-    )
-    
-    # Budget Management Tools
-    get_budgets_tool = FunctionDeclaration(
-        name="get_budgets",
-        description="Get all budgets for an account",
-        parameters={
-            "type": "object",
-            "properties": {
-                "account_id": {"type": "string", "description": "The user's account ID"}
-            },
-            "required": ["account_id"]
-        }
-    )
-    
-    create_budget_tool = FunctionDeclaration(
-        name="create_budget",
-        description="Create a new budget for a spending category",
-        parameters={
-            "type": "object",
-            "properties": {
-                "account_id": {"type": "string", "description": "The user's account ID"},
-                "category": {"type": "string", "description": "Budget category (e.g., Dining, Groceries)"},
-                "budget_limit": {"type": "number", "description": "Budget limit amount"},
-                "period_start": {"type": "string", "description": "Budget period start date (YYYY-MM-DD)"},
-                "period_end": {"type": "string", "description": "Budget period end date (YYYY-MM-DD)"}
-            },
-            "required": ["account_id", "category", "budget_limit", "period_start", "period_end"]
-        }
-    )
-    
-    get_spending_summary_tool = FunctionDeclaration(
-        name="get_spending_summary",
-        description="Get spending summary by category",
-        parameters={
-            "type": "object",
-            "properties": {
-                "account_id": {"type": "string", "description": "The user's account ID"}
-            },
-            "required": ["account_id"]
-        }
-    )
-    
-    get_budget_overview_tool = FunctionDeclaration(
-        name="get_budget_overview",
-        description="Get budget overview showing spending vs limits",
-        parameters={
-            "type": "object",
-            "properties": {
-                "account_id": {"type": "string", "description": "The user's account ID"}
-            },
-            "required": ["account_id"]
-        }
-    )
-    
-    get_saving_tips_tool = FunctionDeclaration(
-        name="get_saving_tips",
-        description="Get personalized saving tips based on spending patterns",
-        parameters={
-            "type": "object",
-            "properties": {
-                "account_id": {"type": "string", "description": "The user's account ID"}
-            },
-            "required": ["account_id"]
-        }
-    )
-    
-    # Transaction Tools
-    send_money_tool = FunctionDeclaration(
-        name="send_money",
-        description="Send money to another account after anomaly detection",
-        parameters={
-            "type": "object",
-            "properties": {
-                "from_account_id": {"type": "string", "description": "Sender's account ID"},
-                "to_account_id": {"type": "string", "description": "Recipient's account ID"},
-                "amount": {"type": "number", "description": "Amount to send"},
-                "currency": {"type": "string", "description": "Currency code (e.g., USD, EUR)"},
-                "description": {"type": "string", "description": "Transaction description/memo"},
-                "routing_num": {"type": "string", "description": "Routing number"}
-            },
-            "required": ["from_account_id", "to_account_id", "amount", "currency", "description"]
-        }
-    )
-    
-    return Tool(function_declarations=[
-        get_contacts_tool, add_contact_tool, update_contact_tool, delete_contact_tool, resolve_contact_tool,
-        get_balance_tool, get_transactions_tool,
-        get_budgets_tool, create_budget_tool, get_spending_summary_tool,
-        get_budget_overview_tool, get_saving_tips_tool,
-        send_money_tool
-    ])
-
-# --- Tool Function Implementations ---
-async def execute_tool_call(tool_call, claims: Dict[str, Any], auth_header: str):
-    """Execute a tool function call"""
-    function_name = tool_call.name
-    args = tool_call.args
-    account_id = claims.get("accountId")
-    
-    logger.info(f"Executing tool: {function_name} with args: {args}")
-    
-    try:
-        # Contact Management Tools
-        if function_name == "get_contacts":
-            result = await sage_services.get_contacts(args["account_id"], auth_header)
-            if isinstance(result, list):
-                return {"contacts": result}
-            elif isinstance(result, dict):
-                return result
-            else:
-                return {"result": result}
-
-        elif function_name == "add_contact":
-            result = await sage_services.add_contact(
-                args["account_id"], 
-                {
-                    "label": args["label"],
-                    "account_num": args["contact_account_num"],
-                    "routing_num": args["routing_num"],
-                    "is_external": args["is_external"]
-                },
-                auth_header
-            )
-            if isinstance(result, dict):
-                return result
-            else:
-                return {"result": result}
-
-        elif function_name == "update_contact":
-            result = await sage_services.update_contact(
-                args["account_id"],
-                args["contact_label"],
-                {
-                    "label": args["label"],
-                    "account_num": args["contact_account_num"],
-                    "routing_num": args["routing_num"],
-                    "is_external": args["is_external"]
-                },
-                auth_header
-            )
-            if isinstance(result, dict):
-                return result
-            else:
-                return {"result": result}
-
-        elif function_name == "delete_contact":
-            result = await sage_services.delete_contact(
-                args["account_id"], args["contact_label"], auth_header
-            )
-            if isinstance(result, dict):
-                return result
-            else:
-                return {"result": result}
-
-        elif function_name == "resolve_contact":
-            result = await sage_services.resolve_contact(
-                args["recipient_name"], args["account_id"], auth_header
-            )
-            if isinstance(result, dict):
-                return result
-            else:
-                return {"result": result}
-        
-        # Financial Information Tools
-        if function_name == "get_balance":
-            result = await sage_services.get_balance(args["account_id"], auth_header)
-            if isinstance(result, dict):
-                return result
-            elif isinstance(result, (int, float)):
-                return {"balance": result}
-            elif isinstance(result, list):
-                return {"items": result}
-            else:
-                return {"result": result}
-
-        elif function_name == "get_transactions":
-            result = await sage_services.get_transactions(args["account_id"], auth_header)
-            if isinstance(result, dict):
-                return result
-            elif isinstance(result, list):
-                return {"transactions": result}
-            else:
-                return {"result": result}
-
-        # Budget Management Tools
-        elif function_name == "get_budgets":
-            result = await sage_services.get_budgets(args["account_id"], auth_header)
-            if isinstance(result, dict):
-                return result
-            elif isinstance(result, list):
-                return {"budgets": result}
-            else:
-                return {"result": result}
-
-        elif function_name == "create_budget":
-            result = await sage_services.create_budget(
-                args["account_id"],
-                {
-                    "category": args["category"],
-                    "budget_limit": args["budget_limit"],
-                    "period_start": args["period_start"],
-                    "period_end": args["period_end"]
-                },
-                auth_header
-            )
-            if isinstance(result, dict):
-                return result
-            else:
-                return {"result": result}
-
-        elif function_name == "get_spending_summary":
-            result = await sage_services.get_spending_summary(args["account_id"], auth_header)
-            if isinstance(result, dict):
-                return result
-            else:
-                return {"result": result}
-
-        elif function_name == "get_budget_overview":
-            result = await sage_services.get_budget_overview(args["account_id"], auth_header)
-            if isinstance(result, dict):
-                return result
-            else:
-                return {"result": result}
-
-        elif function_name == "get_saving_tips":
-            result = await sage_services.get_saving_tips(args["account_id"], auth_header)
-            if isinstance(result, dict):
-                return result
-            else:
-                return {"result": result}
-        
-        # Transaction Tools
-        elif function_name == "send_money":
-            # First resolve recipient if it's a name
-            to_account_id = args["to_account_id"]
-            if not to_account_id.isdigit():
-                # Try to resolve as contact name
-                resolve_result = await sage_services.resolve_contact(
-                    args["to_account_id"], args["from_account_id"], auth_header
-                )
-                if resolve_result["status"] == "success":
-                    to_account_id = resolve_result["account_id"]
-                else:
-                    return {"error": f"Could not find contact: {args['to_account_id']}"}
-            
-            # Convert currency to USD cents
-            amount_cents = await currency_converter.normalize_to_usd_cents(
-                args["amount"], args["currency"]
-            )
-            
-            # Check for anomalies first
-            anomaly_result = await sage_services.detect_anomaly(
-                args["from_account_id"],
-                amount_cents,
-                to_account_id,
-                False,  # Assuming internal transfer
-                auth_header
-            )
-            
-            # If suspicious, initiate OTP confirmation via notifications
-            if anomaly_result.get("status") == "suspicious":
-                otp_code = f"{random.randint(0, 999999):06d}"
-                confirmation_payload = {
-                    "otp": otp_code,
-                    "attempts": 0,
-                    "max_attempts": 3,
-                    "transaction": {
-                        "fromAccountNum": args["from_account_id"],
-                        "toAccountNum": to_account_id,
-                        "toRoutingNum": args.get("routing_num", "883745000"),
-                        "amount": amount_cents,
-                        "description": args["description"],
-                        "is_external": False
-                    }
-                }
-                confirmation = db.create_otp_confirmation(claims.get("acct") or claims.get("accountId"), confirmation_payload, ttl_seconds=300)
-                db.add_notification(
-                    claims.get("acct") or claims.get("accountId"),
-                    message=f"Your OTP for confirming the suspicious transaction is {otp_code}. It expires in 5 minutes.",
-                    notif_type="otp",
-                    metadata={"confirmation_id": confirmation.get("confirmation_id")}
-                )
-                return {
-                    "status": "otp_sent",
-                    "confirmation_id": confirmation.get("confirmation_id"),
-                    "message": "We've sent a 6-digit OTP to your notifications. Please verify to proceed.",
-                    "reasons": anomaly_result.get("reasons", [])
-                }
-            
-            # If fraud, block and notify
-            if anomaly_result.get("status") == "fraud":
-                db.add_notification(
-                    claims.get("acct") or claims.get("accountId"),
-                    message="A potentially fraudulent transaction was blocked. Please review your recent activity.",
-                    notif_type="alert",
-                    metadata={"anomaly": anomaly_result}
-                )
-                return {"status": "blocked", "message": "Transaction blocked due to suspected fraud."}
-            
-            # Execute the transaction
-            transaction_result = await sage_services.execute_transaction(
-                {
-                    "fromAccountNum": args["from_account_id"],
-                    "fromRoutingNum": CONFIG.local_routing_num,
-                    "toAccountNum": to_account_id,
-                    "toRoutingNum": CONFIG.local_routing_num,
-                    "amount": amount_cents,
-                    "uuid": str(uuid.uuid4()),
-                    "description": args["description"]
-                },
-                auth_header
-            )
-            
-            return transaction_result
-        
-        else:
-            return {"error": f"Unknown tool function: {function_name}"}
-    
-    except Exception as e:
-        logger.error(f"Error executing tool {function_name}: {str(e)}")
-        return {"error": f"Failed to execute {function_name}: {str(e)}"}
-
 # --- API Endpoints ---
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
@@ -592,8 +168,8 @@ async def health_check():
         
         # Check Gemini API accessibility (basic test)
         try:
-            model = genai.GenerativeModel('gemini-1.5-pro')
-            dependencies["gemini_api"] = {"status": "configured", "model": "gemini-1.5-pro"}
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            dependencies["gemini_api"] = {"status": "configured", "model": "gemini-2.5-flash"}
         except Exception as e:
             dependencies["gemini_api"] = {"status": "error", "error": str(e)}
             health_status = "unhealthy"
@@ -672,7 +248,7 @@ async def process_chat_request(
         # 2. Create Gemini model with tools
         tools = create_gemini_tools()
         model = genai.GenerativeModel(
-            'gemini-1.5-pro',
+            'gemini-2.5-flash',
             tools=[tools],
             system_instruction=f"""
             You are an intelligent banking assistant for Bank of Anthos. You help users with:
@@ -707,25 +283,28 @@ async def process_chat_request(
         final_text = ""
         if response.candidates and response.candidates[0].content.parts:
             # Check if there are function calls
-            has_function_calls = any(
+            function_calls = [
                 part.function_call for part in response.candidates[0].content.parts
-                if hasattr(part, 'function_call')
-            )
+                if hasattr(part, 'function_call') and part.function_call
+            ]
             
-            if has_function_calls:
-                logger.debug(f"Processing function calls for session {session_id[:8]}...")
-                # Execute tool calls
-                tool_responses = []
+            if function_calls:
+                logger.debug(f"Processing {len(function_calls)} function calls for session {session_id[:8]}...")
                 
-                for part in response.candidates[0].content.parts:
-                    if hasattr(part, 'function_call') and part.function_call:
-                        tool_result = await execute_tool_call(
-                            part.function_call, claims, auth_header
-                        )
-                        tool_responses.append({
-                            "name": part.function_call.name,
-                            "result": tool_result
-                        })
+                # Execute tool calls in parallel
+                tasks = [
+                    execute_tool_call(
+                        fc, claims, auth_header, sage_services, db, currency_converter
+                    ) for fc in function_calls
+                ]
+                results = await asyncio.gather(*tasks)
+                
+                tool_responses = []
+                for fc, result in zip(function_calls, results):
+                    tool_responses.append({
+                        "name": fc.name,
+                        "result": result
+                    })
                 
                 # Send tool responses back to model for final response
                 if tool_responses:
@@ -761,7 +340,7 @@ async def process_chat_request(
         
         logger.info(f"Successfully processed chat request for session {session_id[:8]}...", extra={
             "response_length": len(final_text),
-            "function_calls_made": has_function_calls if 'has_function_calls' in locals() else False
+            "function_calls_made": bool(function_calls) if 'function_calls' in locals() else False
         })
         
         return ChatResponse(
@@ -784,6 +363,116 @@ async def process_chat_request(
             status_code=500,
             detail="I'm sorry, I'm having trouble processing your request right now. Please try again in a moment."
         )
+
+@app.post("/chat/stream")
+async def stream_chat_request(
+    req: ChatRequest, 
+    background_tasks: BackgroundTasks,
+    claims: Dict[str, Any] = Depends(get_current_user_claims)
+):
+    """Process a chat request and stream the response (Server-Sent Events)"""
+    session_id = req.session_id
+    user_query = req.query.strip()
+    account_id = claims.get("acct")
+    raw_token = claims.get("_raw_token")
+    
+    if not raw_token:
+        raise HTTPException(status_code=401, detail="Authentication token not properly formatted")
+    auth_header = f"Bearer {raw_token}"
+    
+    if not user_query:
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+
+    async def event_generator():
+        full_response_text = ""
+        try:
+            # 1. Get history
+            if session_id in session_cache:
+                history = session_cache[session_id]
+            else:
+                history = db.get_session_history(session_id)
+                session_cache[session_id] = history
+            
+            if len(history) > CONFIG.max_conversation_turns * 2:
+                history = history[-(CONFIG.max_conversation_turns * 2):]
+
+            # 2. Create model
+            tools = create_gemini_tools()
+            model = genai.GenerativeModel(
+                'gemini-2.5-flash',
+                tools=[tools],
+                system_instruction=f"You are an intelligent banking assistant for Bank of Anthos. Account ID: {account_id}. Be helpful and concise."
+            )
+            chat = model.start_chat(history=history)
+            
+            # 3. Send message (stream=True)
+            # Note: Tool calls break streaming in simple implementations. 
+            # We'll handle tool calls by buffering if needed, or just handling the first response.
+            response_stream = await chat.send_message_async(user_query, stream=True)
+            
+            tool_calls = []
+            async for chunk in response_stream:
+                if chunk.candidates and chunk.candidates[0].content.parts:
+                    # Check for function calls in this chunk
+                    for part in chunk.candidates[0].content.parts:
+                        if hasattr(part, 'function_call') and part.function_call:
+                            tool_calls.append(part.function_call)
+                        if hasattr(part, 'text') and part.text:
+                            text_chunk = part.text
+                            full_response_text += text_chunk
+                            yield f"data: {json.dumps({'text': text_chunk})}\n\n"
+            
+            # 4. Handle tool calls if any were collected
+            if tool_calls:
+                yield f"data: {json.dumps({'status': 'processing_tools', 'count': len(tool_calls)})}\n\n"
+                
+                tasks = [
+                    execute_tool_call(fc, claims, auth_header, sage_services, db, currency_converter) 
+                    for fc in tool_calls
+                ]
+                results = await asyncio.gather(*tasks)
+                
+                tool_responses = []
+                for fc, result in zip(tool_calls, results):
+                    tool_responses.append({
+                        "name": fc.name,
+                        "result": result
+                    })
+                
+                # Send tool outputs back to model
+                function_responses = [
+                    genai.protos.Part(
+                        function_response=genai.protos.FunctionResponse(
+                            name=resp["name"],
+                            response=resp["result"]
+                        )
+                    ) for resp in tool_responses
+                ]
+                
+                # Get final response (streamed)
+                final_response_stream = await chat.send_message_async(function_responses, stream=True)
+                async for chunk in final_response_stream:
+                    if chunk.text:
+                        full_response_text += chunk.text
+                        yield f"data: {json.dumps({'text': chunk.text})}\n\n"
+
+            # 5. Save history
+            session_cache[session_id] = chat.history
+            # We can't use background_tasks easily inside generator, so we call db directly or schedule it
+            # For simplicity/safety in generator, we'll just log it here. 
+            # Ideally, use a queue or separate worker.
+            try:
+                db.save_session_turn(session_id, user_query, full_response_text)
+            except Exception as e:
+                logger.error(f"Failed to save session turn in stream: {e}")
+
+            yield "data: [DONE]\n\n"
+
+        except Exception as e:
+            logger.error(f"Streaming error: {str(e)}")
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 async def save_conversation_turn(session_id: str, user_query: str, model_response: str, account_id: str):
     """Background task to save conversation turn to database"""
