@@ -18,6 +18,7 @@ load_dotenv()
 # --- Configuration & Logging ---
 AI_META_DB_URI = os.getenv("AI_META_DB_URI")
 LEDGERWRITER_URL = os.getenv("LEDGERWRITER_URL")
+ANOMALY_SAGE_URL = os.getenv("ANOMALY_SAGE_URL", "http://anomaly-sage:8082")
 LOCAL_ROUTING_NUM = os.getenv("LOCAL_ROUTING_NUM", "883745000")
 logging.basicConfig(level=logging.INFO, format='{"ts": "%(asctime)s", "level": "%(levelname)s", "service": "transaction-sage", "message": "%(message)s"}')
 
@@ -65,6 +66,7 @@ async def execute_transaction(req: TransactionRequest, authorization: str = Head
     category = categorize_transaction(req.description)
     today = date.today()
     
+    # Check budget constraints
     active_budget = db.get_active_budget(req.account_id, category, today)
     if active_budget:
         current_usage = db.get_budget_usage(
@@ -73,6 +75,46 @@ async def execute_transaction(req: TransactionRequest, authorization: str = Head
         )
         if (current_usage + req.amount_cents) > active_budget.budget_limit:
             raise HTTPException(status_code=402, detail=f"Transaction would exceed budget for category '{category}'.")
+
+    # Check for anomalies BEFORE executing transaction
+    anomaly_log_id = None
+    anomaly_status = 'normal'
+    try:
+        anomaly_payload = {
+            "account_id": req.account_id,
+            "amount_cents": req.amount_cents,
+            "recipient_id": req.recipient_id,
+            "is_external": req.is_external
+        }
+        headers = {"Authorization": authorization}
+        anomaly_resp = await client.post(f"{ANOMALY_SAGE_URL}/detect-anomaly", json=anomaly_payload, headers=headers)
+        if anomaly_resp.status_code == 200:
+            anomaly_data = anomaly_resp.json()
+            anomaly_status = anomaly_data.get('status', 'normal')
+            anomaly_log_id = anomaly_data.get('log_id')
+            reasons = anomaly_data.get('reasons', [])
+            reason_text = '; '.join(reasons) if reasons else None
+            
+            # Block fraud transactions
+            if anomaly_status == 'fraud':
+                raise HTTPException(status_code=403, detail=f"Transaction blocked due to fraud detection: {reason_text}")
+            
+            # For suspicious transactions, return pending status (user needs to confirm)
+            if anomaly_status == 'suspicious':
+                return TransactionResponse(
+                    status="pending",
+                    transaction_id=anomaly_log_id,
+                    message=f"Transaction flagged as suspicious and requires confirmation. Reasons: {reason_text}"
+                )
+            
+            logging.info(f"Anomaly detection result: status={anomaly_status}, log_id={anomaly_log_id}")
+    except httpx.HTTPStatusError as e:
+        logging.warning(f"Anomaly detection failed: {e}. Proceeding with transaction.")
+    except HTTPException:
+        raise  # Re-raise fraud blocking exception
+
+    # Determine receiver account ID (only for internal transfers)
+    receiver_account_id = req.recipient_id if not req.is_external else None
 
     # The payload now precisely matches the frontend's API contract for the ledgerwriter.
     ledger_payload = {
@@ -101,16 +143,36 @@ async def execute_transaction(req: TransactionRequest, authorization: str = Head
         logging.error(f"Ledgerwriter error: status={e.response.status_code}, body={e.response.text}")
         raise HTTPException(status_code=e.response.status_code, detail=f"Ledgerwriter failed: {e.response.text}")
     
+    # Log transaction with anomaly information
     if transaction_id is not None:
-        db.log_transaction(transaction_id, req.account_id, req.amount_cents, category)
+        db.log_transaction(
+            transaction_id, 
+            anomaly_log_id,
+            req.account_id, 
+            receiver_account_id,
+            req.amount_cents, 
+            category, 
+            req.description
+        )
+        
+        # Link transaction to anomaly log if applicable
+        if anomaly_log_id:
+            try:
+                await client.post(f"{ANOMALY_SAGE_URL}/link-transaction", json={"log_id": anomaly_log_id, "transaction_id": int(transaction_id)})
+            except Exception as e:
+                logging.error(f"Failed to link transaction to anomaly: {e}")
+
     if active_budget:
         db.update_budget_usage(
             req.account_id, category, req.amount_cents,
             active_budget.period_start, active_budget.period_end
         )
 
+    # Construct response message
+    message = f"Transaction for category '{category}' completed successfully."
+
     return TransactionResponse(
         status="completed",
         transaction_id=str(transaction_id),
-        message=f"Transaction for category '{category}' completed successfully."
+        message=message
     )

@@ -34,10 +34,14 @@ class TransactionDb:
         self.transaction_logs_table = Table(
             "transaction_logs", self.metadata,
             Column("id", UUID(as_uuid=True), primary_key=True),
-            Column("transaction_id", BIGINT),
+            Column("transaction_id", BIGINT, nullable=False),
+            Column("anomaly_log_id", UUID(as_uuid=True)),
             Column("account_id", String(10), nullable=False),
+            Column("receiver_account_id", String(10)),
             Column("amount", Integer, nullable=False),
+            Column("transaction_type", String(10)),
             Column("category", String),
+            Column("description", String),
             Column("created_at", Date, default=date.today),
         )
         self.metadata.create_all(self.engine)
@@ -68,16 +72,43 @@ class TransactionDb:
             result = conn.execute(query).first()
         return result.used_amount if result else 0
 
-    def log_transaction(self, transaction_id, account_id, amount_cents, category):
-        statement = self.transaction_logs_table.insert().values(
+    def log_transaction(self, transaction_id, anomaly_log_id, account_id, receiver_account_id, amount_cents, category, description):
+        """
+        Log transaction for both sender (debit) and receiver (credit).
+        This creates TWO entries: one from sender's perspective, one from receiver's.
+        """
+        # Log debit entry for sender
+        debit_statement = self.transaction_logs_table.insert().values(
             id=uuid.uuid4(),
             transaction_id=transaction_id,
+            anomaly_log_id=uuid.UUID(anomaly_log_id) if anomaly_log_id else None,
             account_id=account_id,
+            receiver_account_id=receiver_account_id,
             amount=amount_cents,
-            category=category
+            transaction_type='debit',
+            category=category,
+            description=description
         )
+        
+        # Log credit entry for receiver (if it's an internal transfer)
+        credit_statement = None
+        if receiver_account_id:  # Only log credit if receiver is known (internal transfer)
+            credit_statement = self.transaction_logs_table.insert().values(
+                id=uuid.uuid4(),
+                transaction_id=transaction_id,
+                anomaly_log_id=uuid.UUID(anomaly_log_id) if anomaly_log_id else None,
+                account_id=receiver_account_id,  # Receiver's account is the primary account_id
+                receiver_account_id=account_id,  # Sender becomes the "receiver" from this perspective
+                amount=amount_cents,
+                transaction_type='credit',
+                category='Transfer In',  # Generic category for received money
+                description=f"Received from {account_id}: {description}"
+            )
+        
         with self.engine.connect() as conn:
-            conn.execute(statement)
+            conn.execute(debit_statement)
+            if credit_statement:
+                conn.execute(credit_statement)
             conn.commit()
 
     def update_budget_usage(self, account_id, category, amount_cents, start_date, end_date):

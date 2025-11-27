@@ -44,6 +44,8 @@ spec:
           value: "postgresql://ai-meta-db:ai-meta-db@ai-meta-db:5432/ai-meta-db"
         - name: LEDGERWRITER_URL
           value: "http://ledgerwriter:8080"
+        - name: ANOMALY_SAGE_URL
+          value: "http://anomaly-sage:8085"
         
         resources:
           requests:
