@@ -107,10 +107,41 @@ class SageServices:
         url = f"{self.money_sage_url}/balance/{account_id}"
         return await self._make_request("GET", url, auth_header)
     
-    async def get_transactions(self, account_id: str, auth_header: str) -> Dict[str, Any]:
-        """Get transaction history"""
-        url = f"{self.money_sage_url}/transactions/{account_id}"
-        return await self._make_request("GET", url, auth_header)
+    async def get_transactions(self, account_id: str, auth_header: str,
+                              limit: int = 5, order: str = "desc",
+                              transaction_type: Optional[str] = None,
+                              anomaly_status: Optional[str] = None,
+                              include_total: bool = False) -> Dict[str, Any]:
+        """Get transaction history with optional filters
+        
+        Args:
+            account_id: User's account ID
+            limit: Maximum number of transactions to return (default 5)
+            order: Sort order - 'desc' for newest first (default), 'asc' for oldest first
+            transaction_type: Optional filter - 'debit' or 'credit'
+            anomaly_status: Optional filter - 'normal', 'suspicious', 'fraud'
+            include_total: If True, also fetch total transaction count
+        """
+        # Build query parameters
+        params = [f"limit={limit}", f"order={order}"]
+        if transaction_type:
+            params.append(f"transaction_type={transaction_type}")
+        if anomaly_status:
+            params.append(f"anomaly_status={anomaly_status}")
+        
+        query_string = "&".join(params)
+        url = f"{self.money_sage_url}/transactions/{account_id}?{query_string}"
+        
+        result = await self._make_request("GET", url, auth_header)
+        
+        # If include_total is requested, fetch total count
+        if include_total and isinstance(result, dict) and "error" not in result:
+            total_url = f"{self.money_sage_url}/transactions/{account_id}/count"
+            total_result = await self._make_request("GET", total_url, auth_header)
+            if isinstance(total_result, dict) and "total_count" in total_result:
+                result["total_count"] = total_result["total_count"]
+        
+        return result
     
     async def get_budgets(self, account_id: str, auth_header: str) -> Dict[str, Any]:
         """Get all budgets for an account"""
@@ -156,21 +187,20 @@ class SageServices:
                            auth_header: str) -> Dict[str, Any]:
         """Detect anomalies in a proposed transaction"""
         # Align with anomaly-sage code path (exposes /detect-anomaly)
-        # Try versioned path first; fallback to unversioned for compatibility
         data = {
             "account_id": account_id,
             "amount_cents": amount_cents,
             "recipient_id": recipient_id,
             "is_external": is_external
         }
-        # Try /v1/detect-anomaly
-        url_v1 = f"{self.anomaly_sage_url}/v1/detect-anomaly"
-        result = await self._make_request("POST", url_v1, auth_header, data)
-        if result.get("error") and (result.get("status_code") in (404, 405)):
-            # Fallback to unversioned path used by current anomaly-sage implementation
-            url = f"{self.anomaly_sage_url}/detect-anomaly"
-            result = await self._make_request("POST", url, auth_header, data)
-        return result
+        # Use unversioned path used by current anomaly-sage implementation
+        url = f"{self.anomaly_sage_url}/detect-anomaly"
+        return await self._make_request("POST", url, auth_header, data)
+
+    async def confirm_suspicious_transaction(self, log_id: str, auth_header: str) -> Dict[str, Any]:
+        """Confirm a suspicious transaction in anomaly-sage"""
+        url = f"{self.anomaly_sage_url}/confirm-suspicious/{log_id}"
+        return await self._make_request("POST", url, auth_header)
 
     # Transaction Sage Methods
     async def execute_transaction(self, transaction_data: Dict[str, Any], 

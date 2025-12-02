@@ -93,22 +93,34 @@ async def get_balance(account_id: str, claims: Dict[str, Any] = Depends(get_curr
 async def get_transactions(
     account_id: str, 
     limit: int = 5,
+    order: str = "desc",  # 'desc' for newest first (default), 'asc' for oldest first
     transaction_type: Optional[str] = None,  # Filter: 'debit', 'credit', or None for both
     anomaly_status: Optional[str] = None,     # Filter: 'normal', 'suspicious', 'fraud', or None for all
     claims: Dict[str, Any] = Depends(get_current_user_claims)
 ):
     """
-    Get recent transaction logs from ai-meta-db.
+    Get transaction logs from ai-meta-db.
     Returns categorized transactions with amounts, types (debit/credit), and anomaly information.
     
     Args:
         account_id: User's account ID
-        limit: Maximum number of transactions to return (default: 5, returns all if less than limit)
+        limit: Maximum number of transactions to return (default: 5, returns all available if less than limit)
+        order: Sort order - 'desc' for newest first (default), 'asc' for oldest first
         transaction_type: Optional filter - 'debit' for sent money, 'credit' for received money
         anomaly_status: Optional filter - 'normal', 'suspicious', or 'fraud'
     """
     try:
-        transactions = db.get_transaction_logs(account_id, limit=limit, transaction_type=transaction_type, anomaly_status=anomaly_status)
+        # Validate order parameter
+        if order not in ["asc", "desc"]:
+            order = "desc"
+        
+        transactions = db.get_transaction_logs(
+            account_id, 
+            limit=limit, 
+            order=order,
+            transaction_type=transaction_type, 
+            anomaly_status=anomaly_status
+        )
         
         # Convert amounts from cents to dollars for display
         for txn in transactions:
@@ -119,6 +131,7 @@ async def get_transactions(
             "account_id": account_id,
             "count": len(transactions),
             "limit": limit,
+            "order": order,
             "filters": {
                 "transaction_type": transaction_type,
                 "anomaly_status": anomaly_status
@@ -127,6 +140,39 @@ async def get_transactions(
         }
     except SQLAlchemyError as e:
         logging.error(f"Database error fetching transactions: {e}")
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+@app.get("/transactions/{account_id}/count")
+async def get_transaction_count(
+    account_id: str,
+    transaction_type: Optional[str] = None,
+    anomaly_status: Optional[str] = None,
+    claims: Dict[str, Any] = Depends(get_current_user_claims)
+):
+    """
+    Get total count of transactions for an account.
+    
+    Args:
+        account_id: User's account ID
+        transaction_type: Optional filter - 'debit' or 'credit'
+        anomaly_status: Optional filter - 'normal', 'suspicious', 'fraud'
+    """
+    try:
+        total_count = db.get_transaction_count(
+            account_id,
+            transaction_type=transaction_type,
+            anomaly_status=anomaly_status
+        )
+        return {
+            "account_id": account_id,
+            "total_count": total_count,
+            "filters": {
+                "transaction_type": transaction_type,
+                "anomaly_status": anomaly_status
+            }
+        }
+    except SQLAlchemyError as e:
+        logging.error(f"Database error fetching transaction count: {e}")
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
 @app.post("/budgets/{account_id}", response_model=Budget)

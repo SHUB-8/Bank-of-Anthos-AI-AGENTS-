@@ -84,7 +84,7 @@ class MoneyDb:
                     usage_summary[category] = row['used_amount']
         return usage_summary
     
-    def get_transaction_logs(self, account_id, limit=50, transaction_type=None, anomaly_status=None):
+    def get_transaction_logs(self, account_id, limit=50, order="desc", transaction_type=None, anomaly_status=None):
         """
         Get transaction logs from ai-meta-db for spending analysis and tips.
         Optionally joins with anomaly_logs to get anomaly information.
@@ -92,6 +92,7 @@ class MoneyDb:
         Args:
             account_id: User's account ID
             limit: Maximum number of transactions to return
+            order: Sort order - 'desc' for newest first (default), 'asc' for oldest first
             transaction_type: Optional filter - 'debit' or 'credit'
             anomaly_status: Optional filter - 'normal', 'suspicious', 'fraud', 'pending', 'confirmed', 'expired', 'cancelled'
                            'normal' returns transactions with no anomaly_log_id OR status='normal'
@@ -174,13 +175,70 @@ class MoneyDb:
         if transaction_type:
             query = query.where(self.transaction_logs_table.c.transaction_type == transaction_type)
         
-        # Order and limit
-        query = query.order_by(self.transaction_logs_table.c.id.desc()).limit(limit)
+        # Order by created_at or id based on order parameter
+        if order == "asc":
+            query = query.order_by(self.transaction_logs_table.c.id.asc())
+        else:
+            query = query.order_by(self.transaction_logs_table.c.id.desc())
+        
+        # Apply limit
+        query = query.limit(limit)
         
         with self.engine.connect() as conn:
             result = conn.execute(query)
             transactions = [dict(row._mapping) for row in result]
             return transactions
+
+    def get_transaction_count(self, account_id, transaction_type=None, anomaly_status=None):
+        """
+        Get total count of transactions for an account.
+        
+        Args:
+            account_id: User's account ID
+            transaction_type: Optional filter - 'debit' or 'credit'
+            anomaly_status: Optional filter - 'normal', 'suspicious', 'fraud'
+        
+        Returns:
+            Total count of matching transactions
+        """
+        query = select(func.count()).select_from(self.transaction_logs_table).where(
+            self.transaction_logs_table.c.account_id == account_id
+        )
+        
+        if transaction_type:
+            query = query.where(self.transaction_logs_table.c.transaction_type == transaction_type)
+        
+        if anomaly_status:
+            if anomaly_status == 'normal':
+                from sqlalchemy import or_
+                # Normal means no anomaly_log_id OR status='normal'
+                # For count, we just check if anomaly_log_id is None
+                query = query.where(
+                    self.transaction_logs_table.c.anomaly_log_id == None
+                )
+            else:
+                # For other statuses, need to join
+                query = (
+                    select(func.count())
+                    .select_from(
+                        self.transaction_logs_table.join(
+                            self.anomaly_logs_table,
+                            self.transaction_logs_table.c.anomaly_log_id == self.anomaly_logs_table.c.log_id
+                        )
+                    )
+                    .where(
+                        and_(
+                            self.transaction_logs_table.c.account_id == account_id,
+                            self.anomaly_logs_table.c.status == anomaly_status
+                        )
+                    )
+                )
+                if transaction_type:
+                    query = query.where(self.transaction_logs_table.c.transaction_type == transaction_type)
+        
+        with self.engine.connect() as conn:
+            result = conn.execute(query)
+            return result.scalar() or 0
 
     def create_budget(self, account_id, budget_data):
         budget_id = uuid.uuid4()

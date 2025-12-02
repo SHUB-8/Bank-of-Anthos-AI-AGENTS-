@@ -19,10 +19,10 @@ class ServiceConfig:
     jwt_public_key: str
     
     # Service URLs with defaults
-    contact_sage_url: str = "http://contact-sage:8080"
-    anomaly_sage_url: str = "http://anomaly-sage:8080"
-    transaction_sage_url: str = "http://transaction-sage:8080"
-    money_sage_url: str = "http://money-sage:8080"
+    contact_sage_url: str = "http://contact-sage:8083"
+    anomaly_sage_url: str = "http://anomaly-sage:8085"
+    transaction_sage_url: str = "http://transaction-sage:8086"
+    money_sage_url: str = "http://money-sage:8084"
     
     # Optional configurations
     log_level: str = "INFO"

@@ -279,54 +279,66 @@ async def process_chat_request(
         logger.debug(f"Sending query to Gemini for session {session_id[:8]}...")
         response = await chat.send_message_async(user_query)
         
-        # 5. Handle tool calls if any
+        # 5. Handle tool calls loop (support chained calls)
         final_text = ""
-        if response.candidates and response.candidates[0].content.parts:
-            # Check if there are function calls
-            function_calls = [
-                part.function_call for part in response.candidates[0].content.parts
-                if hasattr(part, 'function_call') and part.function_call
-            ]
+        max_turns = 5
+        current_turn = 0
+        
+        while current_turn < max_turns:
+            current_turn += 1
             
-            if function_calls:
-                logger.debug(f"Processing {len(function_calls)} function calls for session {session_id[:8]}...")
-                
-                # Execute tool calls in parallel
-                tasks = [
-                    execute_tool_call(
-                        fc, claims, auth_header, sage_services, db, currency_converter
-                    ) for fc in function_calls
+            # Check for function calls
+            function_calls = []
+            if response.candidates and response.candidates[0].content.parts:
+                function_calls = [
+                    part.function_call for part in response.candidates[0].content.parts
+                    if hasattr(part, 'function_call') and part.function_call
                 ]
-                results = await asyncio.gather(*tasks)
-                
-                tool_responses = []
-                for fc, result in zip(function_calls, results):
-                    tool_responses.append({
-                        "name": fc.name,
-                        "result": result
-                    })
-                
-                # Send tool responses back to model for final response
-                if tool_responses:
-                    function_responses = []
-                    for resp in tool_responses:
-                        function_responses.append(
-                            genai.protos.Part(
-                                function_response=genai.protos.FunctionResponse(
-                                    name=resp["name"],
-                                    response=resp["result"]
-                                )
-                            )
+            
+            if not function_calls:
+                # No function calls, try to get text
+                try:
+                    final_text = response.text
+                    break # Exit loop, we have the final answer
+                except ValueError:
+                    # No text and no function calls?
+                    final_text = "I'm sorry, I couldn't process that request."
+                    break
+            
+            # We have function calls, execute them
+            logger.debug(f"Processing {len(function_calls)} function calls (Turn {current_turn}) for session {session_id[:8]}...")
+            
+            tasks = [
+                execute_tool_call(
+                    fc, claims, auth_header, sage_services, db, currency_converter
+                ) for fc in function_calls
+            ]
+            results = await asyncio.gather(*tasks)
+            
+            tool_responses = []
+            for fc, result in zip(function_calls, results):
+                tool_responses.append({
+                    "name": fc.name,
+                    "result": result
+                })
+            
+            # Prepare response parts
+            function_responses = []
+            for resp in tool_responses:
+                function_responses.append(
+                    genai.protos.Part(
+                        function_response=genai.protos.FunctionResponse(
+                            name=resp["name"],
+                            response=resp["result"]
                         )
-                    
-                    final_response = await chat.send_message_async(function_responses)
-                    final_text = final_response.text if final_response.text else "I apologize, but I couldn't complete that request. Please try again."
-                else:
-                    final_text = "I tried to help but encountered an issue with the requested action."
-            else:
-                final_text = response.text if response.text else "I'm here to help! Could you please rephrase your request?"
-        else:
-            final_text = "I'm sorry, I didn't understand that. Could you please try asking in a different way?"
+                    )
+                )
+            
+            # Send back to model and loop
+            response = await chat.send_message_async(function_responses)
+            
+        if not final_text:
+             final_text = "I'm sorry, the request was too complex to complete in the allowed steps."
         
         # 6. Update cache and database (async background task)
         updated_history = chat.history
@@ -410,20 +422,32 @@ async def stream_chat_request(
             # We'll handle tool calls by buffering if needed, or just handling the first response.
             response_stream = await chat.send_message_async(user_query, stream=True)
             
-            tool_calls = []
-            async for chunk in response_stream:
-                if chunk.candidates and chunk.candidates[0].content.parts:
-                    # Check for function calls in this chunk
-                    for part in chunk.candidates[0].content.parts:
-                        if hasattr(part, 'function_call') and part.function_call:
-                            tool_calls.append(part.function_call)
-                        if hasattr(part, 'text') and part.text:
-                            text_chunk = part.text
-                            full_response_text += text_chunk
-                            yield f"data: {json.dumps({'text': text_chunk})}\n\n"
+            max_turns = 5
+            current_turn = 0
             
-            # 4. Handle tool calls if any were collected
-            if tool_calls:
+            while current_turn < max_turns:
+                current_turn += 1
+                tool_calls = []
+                
+                async for chunk in response_stream:
+                    if chunk.candidates and chunk.candidates[0].content.parts:
+                        # Check for function calls in this chunk
+                        for part in chunk.candidates[0].content.parts:
+                            if hasattr(part, 'function_call') and part.function_call:
+                                tool_calls.append(part.function_call)
+                            try:
+                                if part.text:
+                                    text_chunk = part.text
+                                    full_response_text += text_chunk
+                                    yield f"data: {json.dumps({'text': text_chunk})}\n\n"
+                            except ValueError:
+                                pass
+                
+                # If no tool calls, we are done
+                if not tool_calls:
+                    break
+                
+                # 4. Handle tool calls if any were collected
                 yield f"data: {json.dumps({'status': 'processing_tools', 'count': len(tool_calls)})}\n\n"
                 
                 tasks = [
@@ -449,12 +473,8 @@ async def stream_chat_request(
                     ) for resp in tool_responses
                 ]
                 
-                # Get final response (streamed)
-                final_response_stream = await chat.send_message_async(function_responses, stream=True)
-                async for chunk in final_response_stream:
-                    if chunk.text:
-                        full_response_text += chunk.text
-                        yield f"data: {json.dumps({'text': chunk.text})}\n\n"
+                # Get next response (streamed) for the next iteration
+                response_stream = await chat.send_message_async(function_responses, stream=True)
 
             # 5. Save history
             session_cache[session_id] = chat.history
@@ -556,6 +576,14 @@ async def verify_otp(req: VerifyOtpRequest, claims: Dict[str, Any] = Depends(get
     # Correct OTP -> execute transaction
     txn = payload.get("transaction", {})
     try:
+        # First confirm the suspicious transaction in anomaly-sage if log_id is present
+        log_id = payload.get("log_id")
+        if log_id:
+            try:
+                await sage_services.confirm_suspicious_transaction(log_id, authorization)
+            except Exception as e:
+                logger.warning(f"Failed to confirm suspicious transaction {log_id} in anomaly-sage: {e}")
+
         result = await sage_services.execute_transaction(
             {
                 "fromAccountNum": txn.get("fromAccountNum"),

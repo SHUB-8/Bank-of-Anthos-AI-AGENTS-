@@ -100,11 +100,16 @@ def create_gemini_tools():
     
     get_transactions_tool = FunctionDeclaration(
         name="get_transactions",
-        description="Get recent transaction history",
+        description="Get transaction history. Use 'limit' to control how many transactions to return (default 5). Use 'order' to sort by newest first (desc) or oldest first (asc). Use 'transaction_type' to filter by 'debit' (sent) or 'credit' (received). Use 'include_total' to also get total transaction count.",
         parameters={
             "type": "object",
             "properties": {
-                "account_id": {"type": "string", "description": "The user's account ID"}
+                "account_id": {"type": "string", "description": "The user's account ID"},
+                "limit": {"type": "integer", "description": "Number of transactions to return. Default is 5 if not specified."},
+                "order": {"type": "string", "description": "Sort order: 'desc' for newest first (default), 'asc' for oldest first"},
+                "transaction_type": {"type": "string", "description": "Filter by type: 'debit' for sent money, 'credit' for received money, or omit for all"},
+                "anomaly_status": {"type": "string", "description": "Filter by anomaly status: 'normal', 'suspicious', 'fraud', or omit for all"},
+                "include_total": {"type": "boolean", "description": "If true, also returns total transaction count for the account"}
             },
             "required": ["account_id"]
         }
@@ -136,6 +141,35 @@ def create_gemini_tools():
                 "period_end": {"type": "string", "description": "Budget period end date (YYYY-MM-DD)"}
             },
             "required": ["account_id", "category", "budget_limit", "period_start", "period_end"]
+        }
+    )
+
+    update_budget_tool = FunctionDeclaration(
+        name="update_budget",
+        description="Update an existing budget's limit or dates",
+        parameters={
+            "type": "object",
+            "properties": {
+                "account_id": {"type": "string", "description": "The user's account ID"},
+                "category": {"type": "string", "description": "Budget category to update"},
+                "budget_limit": {"type": "number", "description": "New budget limit amount (optional)"},
+                "period_start": {"type": "string", "description": "New start date (YYYY-MM-DD) (optional)"},
+                "period_end": {"type": "string", "description": "New end date (YYYY-MM-DD) (optional)"}
+            },
+            "required": ["account_id", "category"]
+        }
+    )
+
+    delete_budget_tool = FunctionDeclaration(
+        name="delete_budget",
+        description="Delete a budget for a specific category",
+        parameters={
+            "type": "object",
+            "properties": {
+                "account_id": {"type": "string", "description": "The user's account ID"},
+                "category": {"type": "string", "description": "Budget category to delete"}
+            },
+            "required": ["account_id", "category"]
         }
     )
     
@@ -209,7 +243,7 @@ def create_gemini_tools():
     return Tool(function_declarations=[
         get_contacts_tool, add_contact_tool, update_contact_tool, delete_contact_tool, resolve_contact_tool,
         get_balance_tool, get_transactions_tool,
-        get_budgets_tool, create_budget_tool, get_spending_summary_tool,
+        get_budgets_tool, create_budget_tool, update_budget_tool, delete_budget_tool, get_spending_summary_tool,
         get_budget_overview_tool, get_saving_tips_tool,
         send_money_tool, get_bank_info_tool
     ])
@@ -297,7 +331,22 @@ async def execute_tool_call(tool_call, claims: Dict[str, Any], auth_header: str,
                 return {"result": result}
 
         elif function_name == "get_transactions":
-            result = await sage_services.get_transactions(args["account_id"], auth_header)
+            # Extract optional parameters with defaults
+            limit = args.get("limit", 5)  # Default to 5 if not specified
+            order = args.get("order", "desc")  # Default to newest first
+            transaction_type = args.get("transaction_type")  # Optional filter
+            anomaly_status = args.get("anomaly_status")  # Optional filter
+            include_total = args.get("include_total", False)
+            
+            result = await sage_services.get_transactions(
+                args["account_id"], 
+                auth_header,
+                limit=limit,
+                order=order,
+                transaction_type=transaction_type,
+                anomaly_status=anomaly_status,
+                include_total=include_total
+            )
             if isinstance(result, dict):
                 return result
             elif isinstance(result, list):
@@ -324,6 +373,38 @@ async def execute_tool_call(tool_call, claims: Dict[str, Any], auth_header: str,
                     "period_start": args["period_start"],
                     "period_end": args["period_end"]
                 },
+                auth_header
+            )
+            if isinstance(result, dict):
+                return result
+            else:
+                return {"result": result}
+
+        elif function_name == "update_budget":
+            # Construct update payload with only provided fields
+            update_data = {}
+            if "budget_limit" in args:
+                update_data["budget_limit"] = args["budget_limit"]
+            if "period_start" in args:
+                update_data["period_start"] = args["period_start"]
+            if "period_end" in args:
+                update_data["period_end"] = args["period_end"]
+
+            result = await sage_services.update_budget(
+                args["account_id"],
+                args["category"],
+                update_data,
+                auth_header
+            )
+            if isinstance(result, dict):
+                return result
+            else:
+                return {"result": result}
+
+        elif function_name == "delete_budget":
+            result = await sage_services.delete_budget(
+                args["account_id"],
+                args["category"],
                 auth_header
             )
             if isinstance(result, dict):
@@ -385,6 +466,7 @@ async def execute_tool_call(tool_call, claims: Dict[str, Any], auth_header: str,
                 otp_code = f"{random.randint(0, 999999):06d}"
                 confirmation_payload = {
                     "otp": otp_code,
+                    "log_id": anomaly_result.get("log_id"),
                     "attempts": 0,
                     "max_attempts": 3,
                     "transaction": {
@@ -441,7 +523,7 @@ async def execute_tool_call(tool_call, claims: Dict[str, Any], auth_header: str,
             topic = args.get("query", "").lower()
             info = {
                 "fees": "Internal transfers are free. External wire transfers cost $5.00. International transaction fee is 1%.",
-                "limits": "Daily transfer limit is $10,000. ATM withdrawal limit is $1,000 per day.",
+                "limits": "Daily transfer limit is $50,000. ATM withdrawal limit is $10,000 per day.",
                 "hours": "AI Support is available 24/7. Human agents are available Mon-Fri 9am-5pm EST.",
                 "contact": "You can reach support at 1-800-ANTHOS-BANK or support@bankofanthos.com.",
                 "interest": "Savings accounts earn 2.5% APY. Checking accounts earn 0.1% APY."
