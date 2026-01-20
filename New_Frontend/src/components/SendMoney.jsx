@@ -65,24 +65,41 @@ const SendMoney = ({ onSuccess, onClose, compact = false }) => {
         isExternal: formData.recipientRoutingNumber && formData.recipientRoutingNumber !== '883745000'
       });
 
-      setSuccess(`Payment of $${formData.amount} sent successfully!`);
-      
-      // Reset form
-      setFormData({
-        recipientType: 'contact',
-        selectedContact: '',
-        recipientAccountNumber: '',
-        recipientRoutingNumber: '',
-        amount: '',
-        description: '',
-        category: 'Other'
-      });
+      // Handle different response statuses
+      // 'pending' or 'suspicious' means it was flagged by anomaly detection but not blocked yet
+      if (result.status === 'pending' || result.status === 'suspicious' || result.anomaly_status === 'pending') {
+         setError('');
+         setSuccess(`Transaction flagged for security review. Please check your Notifications to approve it.`);
+         // Don't clear form immediately so they see the context
+      } else {
+         setError('');
+         setSuccess(`Payment of $${formData.amount} sent successfully!`);
+         
+         // Reset form only on actual success
+         setFormData({
+            recipientType: 'contact',
+            selectedContact: '',
+            recipientAccountNumber: '',
+            recipientRoutingNumber: '',
+            amount: '',
+            description: '',
+            category: 'Other'
+          });
+      }
 
       if (onSuccess) {
         onSuccess(result);
       }
     } catch (err) {
-      setError(err.message || 'Failed to send payment. Please try again.');
+      console.error("SendMoney Error:", err);
+      // Clean up the error message for display
+      let msg = err.message || 'Failed to send payment.';
+      
+      if (msg.toLowerCase().includes('fraud') || msg.toLowerCase().includes('blocked')) {
+         setError(`Security Alert: Transaction blocked. ${msg.replace('Error: ', '')}`);
+      } else {
+         setError(msg);
+      }
     } finally {
       setLoading(false);
     }
