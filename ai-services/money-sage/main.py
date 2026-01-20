@@ -50,6 +50,7 @@ class Budget(BudgetBase):
     account_id: str
     period_start: date
     period_end: date
+    spent: Optional[int] = 0  # Spent amount in cents
 
 class BudgetUpdate(BaseModel):
     budget_limit: Optional[int] = None
@@ -188,7 +189,25 @@ async def create_budget(account_id: str, budget: BudgetCreate, claims: Dict[str,
 @app.get("/budgets/{account_id}", response_model=List[Budget])
 async def get_budgets(account_id: str, claims: Dict[str, Any] = Depends(get_current_user_claims)):
     try:
-        return db.get_budgets(account_id)
+        budgets = db.get_budgets(account_id)
+        
+        # Calculate spent amounts for each budget from budget_usage
+        today = datetime.now(timezone.utc).date()
+        
+        budgets_with_spent = []
+        for budget in budgets:
+            period_start = budget.get('period_start', today.replace(day=1))
+            period_end = budget.get('period_end', (today.replace(day=1) + timedelta(days=31)).replace(day=1) - timedelta(days=1))
+            
+            # Get spending for this category in the budget period
+            spending_by_category = db.get_budget_usage(account_id, period_start, period_end)
+            spent = spending_by_category.get(budget['category'], 0)
+            
+            budget_with_spent = dict(budget)
+            budget_with_spent['spent'] = spent
+            budgets_with_spent.append(budget_with_spent)
+        
+        return budgets_with_spent
     except SQLAlchemyError as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
@@ -201,8 +220,22 @@ async def update_budget(account_id: str, category: str, budget_update: BudgetUpd
         updated_count = db.update_budget(account_id, category, update_data)
         if updated_count == 0:
             raise HTTPException(status_code=404, detail=f"Budget for category '{category}' not found.")
+        
+        # Fetch the updated budget and include the current spent amount
         budgets = db.get_budgets(account_id)
         updated_budget = next((b for b in budgets if b['category'] == category), None)
+        
+        if updated_budget:
+            today = datetime.now(timezone.utc).date()
+            period_start = updated_budget.get('period_start', today.replace(day=1))
+            period_end = updated_budget.get('period_end', (today.replace(day=1) + timedelta(days=31)).replace(day=1) - timedelta(days=1))
+            
+            spending_by_category = db.get_budget_usage(account_id, period_start, period_end)
+            spent = spending_by_category.get(category, 0)
+            
+            updated_budget = dict(updated_budget)
+            updated_budget['spent'] = spent
+            
         return updated_budget
     except SQLAlchemyError as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
@@ -244,7 +277,29 @@ async def get_overview(account_id: str, claims: Dict[str, Any] = Depends(get_cur
         
         overview = {}
         for b in budgets:
+            # Filter out expired or future budgets
+            b_end = b.get('period_end')
+            b_start = b.get('period_start')
+            
+            # Ensure we have date objects (handle strings if necessary)
+            if isinstance(b_end, str):
+                try: b_end = datetime.strptime(b_end, "%Y-%m-%d").date()
+                except: pass
+            if isinstance(b_start, str):
+                try: b_start = datetime.strptime(b_start, "%Y-%m-%d").date()
+                except: pass
+
+            # Skip if budget is expired or in future
+            if b_end and b_end < today:
+                continue
+            if b_start and b_start > today:
+                continue
+
             category = b['category']
+            # If multiple active budgets for same category exist (edge case),
+            # this logic might overwrite. Ideally, we sum limits or pick the most recent.
+            # But the primary fix requested is filtering expired ones.
+            
             spent = spending_by_category.get(category, 0)
             limit = b['budget_limit']
             remaining = limit - spent
@@ -398,7 +453,44 @@ def format_budget_context(overview: dict) -> str:
 
 def generate_rule_based_tips(overview: dict, spending_by_category: dict = None) -> List[str]:
     """Generate rule-based tips as fallback when AI is not available."""
+    import random
     tips = []
+    
+    # Expanded tip templates for variety
+    over_budget_templates = [
+        "You've exceeded your {category} budget by ${amount:.2f}. Consider reviewing your spending in this area.",
+        "Your {category} spending is ${amount:.2f} over budget. Look for ways to cut back this month.",
+        "Alert: {category} is ${amount:.2f} over the limit. Try the envelope method to stay on track.",
+        "Budget exceeded in {category} by ${amount:.2f}. Consider meal prepping or finding free alternatives.",
+    ]
+    
+    at_risk_templates = [
+        "You've used {percentage:.0f}% of your {category} budget. Slow down spending to avoid going over.",
+        "{category} is at {percentage:.0f}% used - only ${remaining:.2f} left. Plan carefully!",
+        "Warning: {category} budget is {percentage:.0f}% spent with ${remaining:.2f} remaining.",
+        "Almost there! {category} is at {percentage:.0f}%. Consider delaying non-essential purchases.",
+    ]
+    
+    on_track_templates = [
+        "Great job staying within your {category} budget at {percentage:.0f}% used!",
+        "You're doing well with {category} - only {percentage:.0f}% spent so far.",
+        "{category} budget is on track ({percentage:.0f}% used). Keep it up!",
+    ]
+    
+    general_tips = [
+        "Try the 50/30/20 rule: 50% needs, 30% wants, 20% savings.",
+        "Review subscriptions monthly - cancel unused ones to save money.",
+        "Set up automatic transfers to savings right after payday.",
+        "Use cashback apps and credit card rewards for everyday purchases.",
+        "Plan meals weekly to reduce food waste and save on groceries.",
+        "Wait 24-48 hours before making non-essential purchases over $50.",
+        "Track every expense for a week to identify spending patterns.",
+        "Consider no-spend days or weeks to boost your savings.",
+        "Shop with a list and avoid impulse buying.",
+        "Compare prices online before making major purchases.",
+        "Negotiate bills like internet and insurance annually.",
+        "Build an emergency fund of 3-6 months of expenses.",
+    ]
     
     # Tips based on budget overview
     for category, data in overview.items():
@@ -406,25 +498,46 @@ def generate_rule_based_tips(overview: dict, spending_by_category: dict = None) 
         spent = data.get("spent", 0)
         limit = data.get("limit", 0)
         remaining = data.get("remaining", 0)
+        percentage = (spent / limit * 100) if limit > 0 else 0
         
         if status == "over_budget":
-            tips.append(f"You've exceeded your {category} budget by ${abs(remaining):.2f}. Consider reviewing your spending in this area and adjusting your budget if needed.")
+            template = random.choice(over_budget_templates)
+            tips.append(template.format(category=category, amount=abs(remaining), percentage=percentage, remaining=remaining))
         elif status == "at_risk":
-            percentage = (spent / limit * 100) if limit > 0 else 0
-            tips.append(f"You've used {percentage:.0f}% of your {category} budget (${spent:.2f}/${limit}). Try to limit spending in this category for the rest of the period.")
+            template = random.choice(at_risk_templates)
+            tips.append(template.format(category=category, amount=abs(remaining), percentage=percentage, remaining=remaining))
+        elif status == "on_track" and random.random() > 0.5:  # 50% chance to include positive feedback
+            template = random.choice(on_track_templates)
+            tips.append(template.format(category=category, amount=spent, percentage=percentage, remaining=remaining))
     
     # Tips based on spending patterns
     if spending_by_category:
         sorted_spending = sorted(spending_by_category.items(), key=lambda x: x[1], reverse=True)
         if len(sorted_spending) > 0:
             top_category, top_amount = sorted_spending[0]
-            if top_amount > 100:  # Only suggest if significant spending
-                tips.append(f"Your highest spending is in {top_category} (${top_amount:.2f}). Consider setting a budget for this category to better track your expenses.")
+            spending_tips = [
+                f"Your highest spending is {top_category} (${top_amount:.2f}). Set a budget to track it better.",
+                f"{top_category} leads your spending at ${top_amount:.2f}. Look for ways to reduce costs here.",
+                f"Focus on {top_category} (${top_amount:.2f}) - your biggest expense category.",
+            ]
+            if top_amount > 100:
+                tips.append(random.choice(spending_tips))
+        
+        # Second highest category tip
+        if len(sorted_spending) > 1:
+            second_category, second_amount = sorted_spending[1]
+            if second_amount > 50 and random.random() > 0.6:
+                tips.append(f"Also watch {second_category} spending (${second_amount:.2f}) - your second largest category.")
     
-    if not tips:
-        if overview:
-            tips.append("Great job! You're on track with your budgets. Keep monitoring your spending to maintain good financial health.")
+    # Add general tips to fill up to 3-5 tips
+    random.shuffle(general_tips)
+    while len(tips) < 3:
+        if general_tips:
+            tips.append(general_tips.pop())
         else:
-            tips.append("Start by creating budgets for your common spending categories to track your expenses better and identify saving opportunities.")
+            break
     
-    return tips
+    # Shuffle the final list for variety
+    random.shuffle(tips)
+    
+    return tips[:5]  # Return max 5 tips

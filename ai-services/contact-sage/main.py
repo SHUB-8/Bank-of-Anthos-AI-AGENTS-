@@ -136,11 +136,15 @@ async def add_contact(account_id: str, contact: Contact, claims: Dict[str, Any] 
 
         # If validation passes, proxy the request to the core service.
         contact_payload = contact.model_dump()
-        contact_payload["username"] = username
+        
+        # Log the payload being sent
+        logging.info(f"Sending contact to core service: label={contact.label}, account_num={contact.account_num}, routing_num={contact.routing_num}, is_external={contact.is_external}")
+        
         resp = await client.post(f"{CONTACTS_SERVICE_URL}/contacts/{username}", json=contact_payload, headers=headers)
         resp.raise_for_status()
         return contact
     except httpx.HTTPStatusError as e:
+        logging.error(f"Core contacts service error: {e.response.status_code} - {e.response.text}")
         raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
 
 @app.put("/contacts/{account_id}/{contact_label}")

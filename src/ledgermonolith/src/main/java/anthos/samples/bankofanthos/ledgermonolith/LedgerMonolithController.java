@@ -27,6 +27,8 @@ import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.LoadingCache;
 import com.google.common.util.concurrent.UncheckedExecutionException;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -267,9 +269,13 @@ public final class LedgerMonolithController {
             transactionRepository.save(transaction);
             this.ledgerWriterCache.put(transaction.getRequestUuid(),
                     transaction.getTransactionId());
-            LOGGER.info("Submitted transaction successfully");
-            return new ResponseEntity<>(READINESS_CODE,
-                    HttpStatus.CREATED);
+            LOGGER.info("Submitted transaction successfully with id: "
+                    + transaction.getTransactionId());
+            // Return JSON response with transaction_id for downstream services
+            Map<String, Object> response = new HashMap<>();
+            response.put("status", READINESS_CODE);
+            response.put("transaction_id", transaction.getTransactionId());
+            return new ResponseEntity<>(response, HttpStatus.CREATED);
 
         } catch (JWTVerificationException e) {
             LOGGER.error("Failed to submit transaction: "

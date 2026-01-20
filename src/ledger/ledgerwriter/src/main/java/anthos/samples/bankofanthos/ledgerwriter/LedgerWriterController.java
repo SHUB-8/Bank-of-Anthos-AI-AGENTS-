@@ -16,18 +16,10 @@
 
 package anthos.samples.bankofanthos.ledgerwriter;
 
-import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_DUPLICATE_TRANSACTION;
-import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_INSUFFICIENT_BALANCE;
-import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_WHEN_AUTHORIZATION_HEADER_NULL;
-
-import com.auth0.jwt.JWTVerifier;
-import com.auth0.jwt.exceptions.JWTVerificationException;
-import com.auth0.jwt.interfaces.DecodedJWT;
-import com.google.common.cache.Cache;
-import com.google.common.cache.CacheBuilder;
-import io.micrometer.core.instrument.binder.cache.GuavaCacheMetrics;
-import io.micrometer.stackdriver.StackdriverMeterRegistry;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
+
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -47,6 +39,18 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
+
+import com.auth0.jwt.JWTVerifier;
+import com.auth0.jwt.exceptions.JWTVerificationException;
+import com.auth0.jwt.interfaces.DecodedJWT;
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
+
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_DUPLICATE_TRANSACTION;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_INSUFFICIENT_BALANCE;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_WHEN_AUTHORIZATION_HEADER_NULL;
+import io.micrometer.core.instrument.binder.cache.GuavaCacheMetrics;
+import io.micrometer.stackdriver.StackdriverMeterRegistry;
 
 @RestController
 public final class LedgerWriterController {
@@ -171,9 +175,13 @@ public final class LedgerWriterController {
             transactionRepository.save(transaction);
             this.cache.put(transaction.getRequestUuid(),
                     transaction.getTransactionId());
-            LOGGER.info("Submitted transaction successfully");
-            return new ResponseEntity<>(READINESS_CODE,
-                    HttpStatus.CREATED);
+            LOGGER.info("Submitted transaction successfully with id: "
+                    + transaction.getTransactionId());
+            // Return JSON response with transaction_id for downstream services
+            Map<String, Object> response = new HashMap<>();
+            response.put("status", READINESS_CODE);
+            response.put("transaction_id", transaction.getTransactionId());
+            return new ResponseEntity<>(response, HttpStatus.CREATED);
 
         } catch (JWTVerificationException e) {
             LOGGER.error("Failed to submit transaction: "

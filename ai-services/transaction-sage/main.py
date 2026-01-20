@@ -28,9 +28,18 @@ class TransactionRequest(BaseModel):
     recipient_id: str
     recipient_routing_num: str
     amount_cents: int
-    description: str
+    description: Optional[str] = ""
+    category: Optional[str] = None
     is_external: bool
     # The uuid field is required for idempotency.
+    request_uuid: str = Field(..., alias="uuid")
+
+class DepositRequest(BaseModel):
+    account_id: str # The user's account ID (internal)
+    external_account_id: str
+    external_routing_num: str
+    amount_cents: int
+    description: Optional[str] = "Deposit from external account"
     request_uuid: str = Field(..., alias="uuid")
 
 class TransactionResponse(BaseModel):
@@ -45,16 +54,80 @@ db = TransactionDb(AI_META_DB_URI, logging)
 
 # --- Business Logic ---
 def categorize_transaction(description: str) -> str:
+    """Categorize transaction based on description keywords."""
+    if not description:
+        return "Other"
     description = description.lower()
-    if any(keyword in description for keyword in ["food", "dinner", "lunch", "cafe", "restaurant", "coffee"]):
+    
+    # Housing
+    if any(keyword in description for keyword in ["rent", "mortgage", "apartment", "housing", "lease", "residence"]):
+        return "Housing"
+
+    # Food & Dining (Prioritize over Shopping)
+    if any(keyword in description for keyword in ["restaurant", "cafe", "coffee", "bar", "pub", "dinner", "lunch", "breakfast", "pizza", "burger", "food", "delivery", "doordash", "ubereats", "grubhub"]):
         return "Dining"
-    if any(keyword in description for keyword in ["market", "groceries", "supermarket"]):
+    
+    # Groceries
+    if any(keyword in description for keyword in ["market", "grocery", "supermarket", "whole foods", "trader joes", "walmart", "target", "costco", "safeway", "kroger", "publix"]):
         return "Groceries"
-    if any(keyword in description for keyword in ["gas", "taxi", "uber", "subway", "train", "lyft"]):
+    
+    # Transportation
+    if any(keyword in description for keyword in ["gas", "fuel", "uber", "lyft", "taxi", "subway", "train", "bus", "parking", "car", "auto", "toyota", "honda", "ford", "metro"]):
         return "Transport"
-    if any(keyword in description for keyword in ["clothes", "amazon", "shopping", "store"]):
+    
+    # Travel
+    if any(keyword in description for keyword in ["flight", "airline", "hotel", "motel", "airbnb", "travel", "vacation", "trip", "booking.com", "expedia"]):
+        return "Travel"
+    
+    # Utilities
+    if any(keyword in description for keyword in ["electric", "water", "gas bill", "power", "waste", "garbage", "sewer", "utility", "utilities"]):
+        return "Utilities"
+
+    # Telecom & Internet
+    if any(keyword in description for keyword in ["phone", "internet", "cable", "wifi", "mobile", "cell", "verizon", "t-mobile", "at&t", "comcast", "xfinity", "broadband"]):
+        return "Telecom"
+    
+    # Healthcare
+    if any(keyword in description for keyword in ["doctor", "dentist", "pharmacy", "hospital", "clinic", "medical", "health", "cvs", "walgreens", "rite aid", "prescription", "vision"]):
+        return "Healthcare"
+    
+    # Entertainment
+    if any(keyword in description for keyword in ["movie", "cinema", "netflix", "spotify", "hulu", "disney", "game", "steam", "playstation", "xbox", "concert", "ticket", "theater", "streaming", "entertainment"]):
+        return "Entertainment"
+    
+    # Education
+    if any(keyword in description for keyword in ["school", "college", "university", "tuition", "course", "udemy", "coursera", "book", "learning", "student", "education"]):
+        return "Education"
+    
+    # Insurance
+    if any(keyword in description for keyword in ["insurance", "premium", "policy", "state farm", "geico", "progressive", "allstate"]):
+        return "Insurance"
+
+    # Services
+    if any(keyword in description for keyword in ["cleaner", "maid", "barber", "salon", "hair", "spa", "gym", "fitness", "workout"]):
+        return "Services"
+
+    # Subscriptions
+    if any(keyword in description for keyword in ["subscription", "patreon", "substack", "onlyfans", "prime", "membership"]):
+        return "Subscription"
+
+    # Shopping (Catch-all for retail)
+    if any(keyword in description for keyword in ["amazon", "ebay", "etsy", "shopify", "store", "shop", "mall", "clothes", "apparel", "shoes", "nike", "adidas", "purchase"]):
         return "Shopping"
-    return "Miscellaneous"
+
+    # Financial/Transfers
+    if any(keyword in description for keyword in ["transfer", "wire", "send", "zelle", "venmo", "paypal", "cashapp", "payment"]):
+        return "Transfer"
+    
+    # Taxes
+    if any(keyword in description for keyword in ["tax", "irs", "revenue"]):
+        return "Taxes"
+    
+    # Charity
+    if any(keyword in description for keyword in ["donation", "charity", "non-profit", "foundation"]):
+        return "Charity"
+    
+    return "Other"
 
 # --- API Endpoints ---
 @app.get("/health")
@@ -63,7 +136,7 @@ async def health():
 
 @app.post("/v1/execute-transaction", response_model=TransactionResponse)
 async def execute_transaction(req: TransactionRequest, authorization: str = Header(...), claims: Dict[str, Any] = Depends(get_current_user_claims)):
-    category = categorize_transaction(req.description)
+    category = req.category if req.category else categorize_transaction(req.description)
     today = date.today()
     
     # Check budget constraints
@@ -79,6 +152,7 @@ async def execute_transaction(req: TransactionRequest, authorization: str = Head
     # Check for anomalies BEFORE executing transaction
     anomaly_log_id = None
     anomaly_status = 'normal'
+    anomaly_expires_at = None
     try:
         anomaly_payload = {
             "account_id": req.account_id,
@@ -93,18 +167,20 @@ async def execute_transaction(req: TransactionRequest, authorization: str = Head
             anomaly_status = anomaly_data.get('status', 'normal')
             anomaly_log_id = anomaly_data.get('log_id')
             reasons = anomaly_data.get('reasons', [])
+            anomaly_expires_at = anomaly_data.get('expires_at')
             reason_text = '; '.join(reasons) if reasons else None
             
-            # Block fraud transactions
+            # Block fraud transactions - NEVER execute
             if anomaly_status == 'fraud':
                 raise HTTPException(status_code=403, detail=f"Transaction blocked due to fraud detection: {reason_text}")
             
-            # For suspicious transactions, return pending status (user needs to confirm)
-            if anomaly_status == 'suspicious':
+            # For pending transactions, require user confirmation (24h TTL)
+            if anomaly_status == 'pending':
+                expiry_msg = f" Expires at: {anomaly_expires_at}" if anomaly_expires_at else ""
                 return TransactionResponse(
                     status="pending",
                     transaction_id=anomaly_log_id,
-                    message=f"Transaction flagged as suspicious and requires confirmation. Reasons: {reason_text}"
+                    message=f"Transaction flagged and requires confirmation. Reasons: {reason_text}.{expiry_msg}"
                 )
             
             logging.info(f"Anomaly detection result: status={anomaly_status}, log_id={anomaly_log_id}")
@@ -132,35 +208,51 @@ async def execute_transaction(req: TransactionRequest, authorization: str = Head
         resp = await client.post(f"{LEDGERWRITER_URL}/transactions", json=ledger_payload, headers=headers)
         logging.info(f"Ledgerwriter response status: {resp.status_code}, body: {resp.text}")
         resp.raise_for_status()
-        if resp.status_code == 201 and resp.text.strip() == "ok":
-            transaction_id = None
-        else:
+        # Ledgerwriter returns JSON with transaction_id on success
+        if resp.status_code == 201:
             try:
-                transaction_id = resp.json().get('transaction_id', None)
+                resp_data = resp.json()
+                transaction_id = resp_data.get('transaction_id')
+                logging.info(f"Transaction successful, transaction_id from ledgerwriter: {transaction_id}")
             except Exception:
-                transaction_id = None
+                # Fallback: generate numeric ID from request uuid if parsing fails
+                transaction_id = abs(hash(req.request_uuid)) % (10**10)
+                logging.warning(f"Could not parse transaction_id from response, using generated: {transaction_id}")
+        else:
+            transaction_id = abs(hash(req.request_uuid)) % (10**10)
     except httpx.HTTPStatusError as e:
         logging.error(f"Ledgerwriter error: status={e.response.status_code}, body={e.response.text}")
         raise HTTPException(status_code=e.response.status_code, detail=f"Ledgerwriter failed: {e.response.text}")
     
-    # Log transaction with anomaly information
-    if transaction_id is not None:
-        db.log_transaction(
-            transaction_id, 
-            anomaly_log_id,
-            req.account_id, 
-            receiver_account_id,
-            req.amount_cents, 
-            category, 
-            req.description
-        )
-        
-        # Link transaction to anomaly log if applicable
-        if anomaly_log_id:
-            try:
-                await client.post(f"{ANOMALY_SAGE_URL}/link-transaction", json={"log_id": anomaly_log_id, "transaction_id": int(transaction_id)})
-            except Exception as e:
-                logging.error(f"Failed to link transaction to anomaly: {e}")
+    # Log transaction with anomaly information - always log on success
+    db.log_transaction(
+        transaction_id, 
+        anomaly_log_id,
+        req.account_id, 
+        receiver_account_id,
+        req.amount_cents, 
+        category, 
+        req.description
+    )
+    logging.info(f"Transaction logged to ai-meta-db: txn_id={transaction_id}, account={req.account_id}, amount={req.amount_cents}, category={category}")
+    
+    # Link transaction to anomaly log if applicable
+    if anomaly_log_id:
+        try:
+            await client.post(f"{ANOMALY_SAGE_URL}/link-transaction", json={"log_id": anomaly_log_id, "transaction_id": int(transaction_id)})
+        except Exception as e:
+            logging.error(f"Failed to link transaction to anomaly: {e}")
+
+    # Update user profile after successful transaction (Welford's algorithm for O(1) updates)
+    try:
+        update_payload = {
+            "account_id": req.account_id,
+            "amount_cents": req.amount_cents
+        }
+        await client.post(f"{ANOMALY_SAGE_URL}/update-profile", json=update_payload, headers=headers)
+        logging.info(f"User profile updated for account {req.account_id}")
+    except Exception as e:
+        logging.warning(f"Failed to update user profile: {e}. Non-critical, continuing.")
 
     if active_budget:
         db.update_budget_usage(
@@ -176,3 +268,96 @@ async def execute_transaction(req: TransactionRequest, authorization: str = Head
         transaction_id=str(transaction_id),
         message=message
     )
+
+@app.post("/v1/deposit", response_model=TransactionResponse)
+async def deposit_funds(req: DepositRequest, authorization: str = Header(...), claims: Dict[str, Any] = Depends(get_current_user_claims)):
+    """
+    Handle deposit from external account.
+    Sender: External Account (provided in req)
+    Receiver: Internal Account (req.account_id - must match token)
+    """
+    # Verify account ownership (Token account must match request target)
+    if req.account_id != claims.get('acct'):
+        raise HTTPException(status_code=403, detail="Cannot deposit into another user's account.")
+
+    # --- Idempotency Check ---
+    existing = db.check_idempotency_key(req.request_uuid)
+    if existing:
+        if existing.status == 'completed':
+            logging.info(f"Idempotent hit for UUID {req.request_uuid}, returning cached response.")
+            return TransactionResponse(**existing.response_payload)
+        else:
+            # in_progress or other
+            logging.warning(f"Duplicate request for UUID {req.request_uuid} which is {existing.status}")
+            raise HTTPException(status_code=409, detail="Transaction request with this UUID is already in progress.")
+    
+    # Lock the UUID
+    try:
+        db.lock_idempotency_key(req.request_uuid, req.account_id)
+    except Exception as e:
+        logging.error(f"Failed to lock idempotency key: {e}")
+        # Race condition caught
+        raise HTTPException(status_code=409, detail="Transaction already processing.")
+    # -------------------------
+    
+    # Validation: Max deposit limit ($50,000)
+    if req.amount_cents > 5000000:
+        raise HTTPException(status_code=400, detail="Deposit amount exceeds the $50,000 daily limit.")
+
+    # Validation: Cannot deposit from local bank routing number (would use internal transfer instead)
+    # UPDATED: Allow legacy frontend default bank (883745000) to simulation deposits
+    # if req.external_routing_num == LOCAL_ROUTING_NUM:
+    #     raise HTTPException(status_code=400, detail="Use standard transfer for internal accounts.")
+
+    # Ledgerwriter Payload
+    ledger_payload = {
+        "fromAccountNum": req.external_account_id,
+        "fromRoutingNum": req.external_routing_num,
+        "toAccountNum": req.account_id,
+        "toRoutingNum": LOCAL_ROUTING_NUM,
+        "amount": req.amount_cents,
+        "uuid": req.request_uuid
+    }
+    
+    transaction_id = abs(hash(req.request_uuid)) % (10**10) # Default fallback
+
+    try:
+        logging.info(f"Sending deposit payload to ledgerwriter: {ledger_payload}")
+        headers = {"Authorization": authorization}
+        resp = await client.post(f"{LEDGERWRITER_URL}/transactions", json=ledger_payload, headers=headers)
+        resp.raise_for_status()
+        
+        if resp.status_code == 201:
+            try:
+                resp_data = resp.json()
+                transaction_id = resp_data.get('transaction_id', transaction_id)
+            except:
+                pass
+                
+    except httpx.HTTPStatusError as e:
+        logging.error(f"Ledgerwriter error: {e.response.text}")
+        # Could mark idempotency as failed or delete it to allow retry?
+        # For now, let it stick as in_progress (maybe expire it with a cron?) or simple error 500
+        raise HTTPException(status_code=e.response.status_code, detail=f"Deposit failed: {e.response.text}")
+
+    # Log Deposit Transaction
+    db.log_transaction(
+        transaction_id,
+        None,
+        req.external_account_id,
+        req.account_id,
+        req.amount_cents,
+        "Deposit",
+        req.description
+    )
+
+    response_data = TransactionResponse(
+        status="completed",
+        transaction_id=str(transaction_id),
+        message="Deposit successful"
+    )
+    
+    # Mark Idempotency as Completed
+    db.complete_idempotency_key(req.request_uuid, response_data.dict())
+    
+    return response_data

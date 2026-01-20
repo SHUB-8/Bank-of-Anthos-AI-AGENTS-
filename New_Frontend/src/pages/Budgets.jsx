@@ -14,12 +14,16 @@ const Budgets = () => {
     name: '',
     limit: '',
     category: '',
-    color: '#3B82F6'
+    color: '#3B82F6',
+    periodStart: new Date().toISOString().split('T')[0],
+    periodEnd: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().split('T')[0]
   });
 
   const categories = [
-    'Food', 'Transportation', 'Entertainment', 'Utilities', 'Healthcare',
-    'Shopping', 'Education', 'Travel', 'Insurance', 'Other'
+    'Housing', 'Dining', 'Groceries', 'Transport', 'Travel', 
+    'Utilities', 'Telecom', 'Healthcare', 'Entertainment', 'Education', 
+    'Insurance', 'Services', 'Subscription', 'Shopping', 'Transfer', 
+    'Taxes', 'Charity', 'Other'
   ];
 
   const colors = [
@@ -44,7 +48,14 @@ const Budgets = () => {
 
   const handleCreateBudget = () => {
     setEditingBudget(null);
-    setFormData({ name: '', limit: '', category: '', color: '#3B82F6' });
+    setFormData({ 
+      name: '', 
+      limit: '', 
+      category: '', 
+      color: '#3B82F6',
+      periodStart: new Date().toISOString().split('T')[0],
+      periodEnd: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().split('T')[0]
+    });
     setModalOpen(true);
   };
 
@@ -54,7 +65,9 @@ const Budgets = () => {
       name: budget.name,
       limit: budget.limit.toString(),
       category: budget.category,
-      color: budget.color
+      color: budget.color,
+      periodStart: budget.periodStart || new Date().toISOString().split('T')[0],
+      periodEnd: budget.periodEnd || new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().split('T')[0]
     });
     setModalOpen(true);
   };
@@ -71,10 +84,18 @@ const Budgets = () => {
       };
 
       if (editingBudget) {
-        const updatedBudget = await moneySageAPI.updateBudget(editingBudget.id, budgetData);
+        const updatedBudget = await moneySageAPI.updateBudget(editingBudget.id, {
+          ...budgetData,
+          periodStart: formData.periodStart,
+          periodEnd: formData.periodEnd
+        });
         setBudgets(prev => prev.map(b => b.id === editingBudget.id ? updatedBudget : b));
       } else {
-        const newBudget = await moneySageAPI.createBudget(budgetData);
+        const newBudget = await moneySageAPI.createBudget({
+          ...budgetData,
+          periodStart: formData.periodStart,
+          periodEnd: formData.periodEnd
+        });
         setBudgets(prev => [...prev, newBudget]);
       }
 
@@ -85,11 +106,11 @@ const Budgets = () => {
     }
   };
 
-  const handleDeleteBudget = async (budgetId) => {
+  const handleDeleteBudget = async (budget) => {
     if (window.confirm('Are you sure you want to delete this budget?')) {
       try {
-        await moneySageAPI.deleteBudget(budgetId);
-        setBudgets(prev => prev.filter(b => b.id !== budgetId));
+        await moneySageAPI.deleteBudget(budget.id, budget.category || budget.name);
+        setBudgets(prev => prev.filter(b => b.id !== budget.id));
       } catch (error) {
         console.error('Failed to delete budget:', error);
       }
@@ -111,6 +132,80 @@ const Budgets = () => {
     );
   }
 
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+
+  const activeBudgets = budgets.filter(b => new Date(b.periodEnd) >= now);
+  const expiredBudgets = budgets.filter(b => new Date(b.periodEnd) < now);
+
+  const renderBudgetCard = (budget, isExpired) => {
+    const percentage = (budget.spent / budget.limit) * 100;
+    const remaining = budget.limit - budget.spent;
+    const status = getBudgetStatus(budget.spent, budget.limit);
+
+    return (
+      <div key={budget.id} className={`bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow ${isExpired ? 'opacity-70 bg-gray-50' : ''}`}>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-col">
+            <h3 className="text-lg font-semibold text-gray-900">{budget.name}</h3>
+            <span className="text-xs text-gray-500">
+              {budget.periodStart} - {budget.periodEnd}
+            </span>
+            {isExpired && <span className="text-xs font-bold text-red-500 mt-1">EXPIRED</span>}
+          </div>
+          <div className="flex space-x-2">
+            <button
+              onClick={() => handleEditBudget(budget)}
+              className="text-gray-400 hover:text-gray-600"
+            >
+              <Edit3 className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => handleDeleteBudget(budget)}
+              className="text-gray-400 hover:text-red-600"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex justify-between text-sm">
+            <span className="text-gray-600">Spent</span>
+            <span className="font-medium">${budget.spent}</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-gray-600">Budget</span>
+            <span className="font-medium">${budget.limit}</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-gray-600">Remaining</span>
+            <span className={`font-medium ${remaining >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+              ${remaining.toFixed(2)}
+            </span>
+          </div>
+
+          <div className="w-full bg-gray-200 rounded-full h-2">
+            <div
+              className="h-2 rounded-full transition-all duration-300"
+              style={{
+                width: `${Math.min(percentage, 100)}%`,
+                backgroundColor: budget.color
+              }}
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-gray-600">{budget.category}</span>
+            <div className={`px-2 py-1 rounded-full text-xs font-medium ${status.bg} ${status.color}`}>
+              {status.status}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -125,16 +220,16 @@ const Budgets = () => {
         </button>
       </div>
 
-      {/* Budget Overview */}
+      {/* Active Budget Overview */}
       <div className="bg-white rounded-lg shadow-sm border p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Budget Overview</h2>
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">Active Budget Overview</h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
           <div className="bg-blue-50 p-4 rounded-lg">
             <div className="flex items-center">
               <Target className="h-8 w-8 text-blue-600 mr-3" />
               <div>
-                <p className="text-sm font-medium text-blue-600">Total Budgets</p>
-                <p className="text-2xl font-bold text-blue-900">{budgets.length}</p>
+                <p className="text-sm font-medium text-blue-600">Active Budgets</p>
+                <p className="text-2xl font-bold text-blue-900">{activeBudgets.length}</p>
               </div>
             </div>
           </div>
@@ -145,7 +240,7 @@ const Budgets = () => {
               <div>
                 <p className="text-sm font-medium text-green-600">Total Allocated</p>
                 <p className="text-2xl font-bold text-green-900">
-                  ${budgets.reduce((sum, b) => sum + b.limit, 0)}
+                  ${activeBudgets.reduce((sum, b) => sum + b.limit, 0)}
                 </p>
               </div>
             </div>
@@ -157,80 +252,35 @@ const Budgets = () => {
               <div>
                 <p className="text-sm font-medium text-orange-600">Total Spent</p>
                 <p className="text-2xl font-bold text-orange-900">
-                  ${budgets.reduce((sum, b) => sum + b.spent, 0)}
+                  ${activeBudgets.reduce((sum, b) => sum + b.spent, 0)}
                 </p>
               </div>
             </div>
           </div>
         </div>
         
-        {budgets.length > 0 && <BudgetBarChart budgets={budgets} />}
+        {activeBudgets.length > 0 && <BudgetBarChart budgets={activeBudgets} />}
       </div>
 
-      {/* Budget Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {budgets.map((budget) => {
-          const percentage = (budget.spent / budget.limit) * 100;
-          const remaining = budget.limit - budget.spent;
-          const status = getBudgetStatus(budget.spent, budget.limit);
+      {/* Active Budget Cards */}
+      {activeBudgets.length > 0 && (
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Active Budgets</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {activeBudgets.map(budget => renderBudgetCard(budget, false))}
+          </div>
+        </div>
+      )}
 
-          return (
-            <div key={budget.id} className="bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-gray-900">{budget.name}</h3>
-                <div className="flex space-x-2">
-                  <button
-                    onClick={() => handleEditBudget(budget)}
-                    className="text-gray-400 hover:text-gray-600"
-                  >
-                    <Edit3 className="h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={() => handleDeleteBudget(budget.id)}
-                    className="text-gray-400 hover:text-red-600"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Spent</span>
-                  <span className="font-medium">${budget.spent}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Budget</span>
-                  <span className="font-medium">${budget.limit}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Remaining</span>
-                  <span className={`font-medium ${remaining >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    ${remaining.toFixed(2)}
-                  </span>
-                </div>
-
-                <div className="w-full bg-gray-200 rounded-full h-2">
-                  <div
-                    className="h-2 rounded-full transition-all duration-300"
-                    style={{
-                      width: `${Math.min(percentage, 100)}%`,
-                      backgroundColor: budget.color
-                    }}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-600">{budget.category}</span>
-                  <div className={`px-2 py-1 rounded-full text-xs font-medium ${status.bg} ${status.color}`}>
-                    {status.status}
-                  </div>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      {/* Expired Budget Cards */}
+      {expiredBudgets.length > 0 && (
+        <div className="mt-8">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Expired Budgets</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {expiredBudgets.map(budget => renderBudgetCard(budget, true))}
+          </div>
+        </div>
+      )}
 
       {/* Create/Edit Budget Modal */}
       <Modal
@@ -286,21 +336,42 @@ const Budgets = () => {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Color
-            </label>
-            <div className="flex space-x-2">
-              {colors.map(color => (
+            <label className="block text-sm font-medium text-gray-700 mb-1">Color</label>
+            <div className="flex gap-2">
+              {colors.map(c => (
                 <button
-                  key={color}
+                  key={c}
                   type="button"
-                  onClick={() => setFormData(prev => ({ ...prev, color }))}
+                  onClick={() => setFormData({ ...formData, color: c })}
                   className={`w-8 h-8 rounded-full border-2 ${
-                    formData.color === color ? 'border-gray-400' : 'border-gray-200'
+                    formData.color === c ? 'border-gray-900' : 'border-transparent'
                   }`}
-                  style={{ backgroundColor: color }}
+                  style={{ backgroundColor: c }}
                 />
               ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
+              <input
+                type="date"
+                required
+                value={formData.periodStart}
+                onChange={(e) => setFormData({ ...formData, periodStart: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
+              <input
+                type="date"
+                required
+                value={formData.periodEnd}
+                onChange={(e) => setFormData({ ...formData, periodEnd: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
             </div>
           </div>
 

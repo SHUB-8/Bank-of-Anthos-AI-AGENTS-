@@ -108,13 +108,54 @@ def create_gemini_tools():
                 "limit": {"type": "integer", "description": "Number of transactions to return. Default is 5 if not specified."},
                 "order": {"type": "string", "description": "Sort order: 'desc' for newest first (default), 'asc' for oldest first"},
                 "transaction_type": {"type": "string", "description": "Filter by type: 'debit' for sent money, 'credit' for received money, or omit for all"},
-                "anomaly_status": {"type": "string", "description": "Filter by anomaly status: 'normal', 'suspicious', 'fraud', or omit for all"},
+                "anomaly_status": {"type": "string", "description": "Filter by anomaly status: 'normal', 'pending', 'confirmed', 'cancelled', 'expired', 'fraud', or omit for all"},
                 "include_total": {"type": "boolean", "description": "If true, also returns total transaction count for the account"}
             },
             "required": ["account_id"]
         }
     )
     
+    # Anomaly Management Tools
+    confirm_pending_transaction_tool = FunctionDeclaration(
+        name="confirm_pending_transaction",
+        description="Confirm a transaction that was flagged as pending/suspicious. This allows the transaction to be retried successfully.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "log_id": {"type": "string", "description": "The ID of the anomaly log entry to confirm"}
+            },
+            "required": ["log_id"]
+        }
+    )
+
+    cancel_pending_transaction_tool = FunctionDeclaration(
+        name="cancel_pending_transaction",
+        description="Cancel a transaction that was flagged as pending/suspicious.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "log_id": {"type": "string", "description": "The ID of the anomaly log entry to cancel"}
+            },
+            "required": ["log_id"]
+        }
+    )
+
+    deposit_funds_tool = FunctionDeclaration(
+        name="deposit_funds",
+        description="Deposit funds from an external bank account into the user's account",
+        parameters={
+            "type": "object",
+            "properties": {
+                "account_id": {"type": "string", "description": "The user's account ID (internal)"},
+                "external_account_id": {"type": "string", "description": "The sender's external account number"},
+                "external_routing_num": {"type": "string", "description": "The sender's external routing number"},
+                "amount": {"type": "number", "description": "Amount to deposit in dollars"},
+                "description": {"type": "string", "description": "Description of the deposit"}
+            },
+            "required": ["account_id", "external_account_id", "external_routing_num", "amount"]
+        }
+    )
+
     # Budget Management Tools
     get_budgets_tool = FunctionDeclaration(
         name="get_budgets",
@@ -243,6 +284,8 @@ def create_gemini_tools():
     return Tool(function_declarations=[
         get_contacts_tool, add_contact_tool, update_contact_tool, delete_contact_tool, resolve_contact_tool,
         get_balance_tool, get_transactions_tool,
+        confirm_pending_transaction_tool, cancel_pending_transaction_tool,
+        deposit_funds_tool,
         get_budgets_tool, create_budget_tool, update_budget_tool, delete_budget_tool, get_spending_summary_tool,
         get_budget_overview_tool, get_saving_tips_tool,
         send_money_tool, get_bank_info_tool
@@ -318,6 +361,32 @@ async def execute_tool_call(tool_call, claims: Dict[str, Any], auth_header: str,
             else:
                 return {"result": result}
         
+        # Anomaly Management Tools
+        elif function_name == "confirm_pending_transaction":
+            result = await sage_services.confirm_pending_transaction(args["log_id"], auth_header)
+            return result
+        
+        elif function_name == "cancel_pending_transaction":
+            result = await sage_services.cancel_pending_transaction(args["log_id"], auth_header)
+            return result
+        
+        elif function_name == "deposit_funds":
+            # Simple conversion to cents
+            amount_cents = int(float(args["amount"]) * 100)
+            
+            result = await sage_services.deposit_funds(
+                {
+                    "account_id": args["account_id"],
+                    "external_account_id": args["external_account_id"],
+                    "external_routing_num": args["external_routing_num"],
+                    "amount_cents": amount_cents,
+                    "description": args.get("description", "Deposit"),
+                    # uuid generation handled in service if not passed, but we can pass here
+                },
+                auth_header
+            )
+            return result
+
         # Financial Information Tools
         if function_name == "get_balance":
             result = await sage_services.get_balance(args["account_id"], auth_header)
@@ -461,8 +530,8 @@ async def execute_tool_call(tool_call, claims: Dict[str, Any], auth_header: str,
                 auth_header
             )
             
-            # If suspicious, initiate OTP confirmation via notifications
-            if anomaly_result.get("status") == "suspicious":
+            # If pending, initiate OTP confirmation via notifications
+            if anomaly_result.get("status") == "pending":
                 otp_code = f"{random.randint(0, 999999):06d}"
                 confirmation_payload = {
                     "otp": otp_code,
@@ -481,7 +550,7 @@ async def execute_tool_call(tool_call, claims: Dict[str, Any], auth_header: str,
                 confirmation = db.create_otp_confirmation(claims.get("acct") or claims.get("accountId"), confirmation_payload, ttl_seconds=300)
                 db.add_notification(
                     claims.get("acct") or claims.get("accountId"),
-                    message=f"Your OTP for confirming the suspicious transaction is {otp_code}. It expires in 5 minutes.",
+                    message=f"Your OTP for confirming the pending transaction is {otp_code}. It expires in 5 minutes.",
                     notif_type="otp",
                     metadata={"confirmation_id": confirmation.get("confirmation_id")}
                 )

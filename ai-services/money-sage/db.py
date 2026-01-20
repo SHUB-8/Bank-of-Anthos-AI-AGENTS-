@@ -1,8 +1,10 @@
 # db.py
-import logging
-from sqlalchemy import create_engine, MetaData, Table, Column, String, Integer, Date, and_, func, select, Float, TIMESTAMP, ARRAY
-from sqlalchemy.dialects.postgresql import UUID, BIGINT
+import os
 import uuid
+import logging
+from datetime import datetime
+from sqlalchemy import create_engine, MetaData, Table, Column, String, Float, Integer, Date, TIMESTAMP, select, func, and_, or_, literal, text
+from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY, BIGINT
 
 class MoneyDb:
     def __init__(self, uri, logger=logging):
@@ -42,7 +44,7 @@ class MoneyDb:
             Column("transaction_type", String(10)),
             Column("category", String),
             Column("description", String),
-            Column("created_at", Date),
+            Column("created_at", TIMESTAMP(timezone=True)),
         )
         
         # Reference to anomaly_logs for anomaly information
@@ -65,12 +67,31 @@ class MoneyDb:
         self.metadata.create_all(self.engine)
 
     def get_budget_usage(self, account_id, start_date, end_date):
-        """Queries the budget_usage table to get total spending per category."""
-        self.logger.info(f"Database: Getting budget usage for account {account_id}")
-        query = self.budget_usage_table.select().where(
-            self.budget_usage_table.c.account_id == account_id,
-            self.budget_usage_table.c.period_start >= start_date,
-            self.budget_usage_table.c.period_end <= end_date
+        """
+        Calculates total spending per category directly from transaction_logs.
+        This ensures real-time updates when transactions are made.
+        """
+        self.logger.info(f"Database: Calculating budget usage for account {account_id}")
+        
+        # Ensure dates are datetime objects for comparison (start of day / end of day)
+        # Assuming start_date and end_date might be date objects, convert to datetime or rely on strict type
+        # Ideally, we cast to appropriate db type or use date based comparison
+        
+        # Sum amount where type is debit
+        query = (
+            select(
+                self.transaction_logs_table.c.category,
+                func.sum(self.transaction_logs_table.c.amount).label('total_spent')
+            )
+            .where(
+                and_(
+                    self.transaction_logs_table.c.account_id == account_id,
+                    self.transaction_logs_table.c.transaction_type == 'debit',
+                    self.transaction_logs_table.c.created_at >= start_date,
+                    self.transaction_logs_table.c.created_at <= end_date
+                )
+            )
+            .group_by(self.transaction_logs_table.c.category)
         )
         
         usage_summary = {}
@@ -78,147 +99,147 @@ class MoneyDb:
             result = conn.execute(query)
             for row in result.mappings():
                 category = row['category']
-                if category in usage_summary:
-                    usage_summary[category] += row['used_amount']
-                else:
-                    usage_summary[category] = row['used_amount']
+                total_spent = row['total_spent'] or 0
+                # Transaction amounts are stored in cents, positive for debit usually? 
+                # Let's check transaction_logs logic.
+                # In db.py get_transactions: 
+                # "amount" column appears to be integer (cents). 
+                # Usually debits are positive integers in ledgers if "type" distinguishes them, 
+                # or negative if "amount" distinguishes.
+                # In Transactions.jsx: txn.amount is negative for debits.
+                # In ai_agents.js: amount: txn.transaction_type === 'debit' ? -(txn.amount) : txn.amount
+                # This implies backend returns positive cents for debit if transaction_type='debit'.
+                
+                # Check get_transaction_logs implementation or transaction_logs table constraints.
+                # Constraint: check(transaction_type in ('debit', 'credit'))
+                # If we assume amount is absolute value:
+                usage_summary[category] = int(total_spent)
+
         return usage_summary
     
     def get_transaction_logs(self, account_id, limit=50, order="desc", transaction_type=None, anomaly_status=None):
         """
-        Get transaction logs from ai-meta-db for spending analysis and tips.
-        Optionally joins with anomaly_logs to get anomaly information.
-        
-        Args:
-            account_id: User's account ID
-            limit: Maximum number of transactions to return
-            order: Sort order - 'desc' for newest first (default), 'asc' for oldest first
-            transaction_type: Optional filter - 'debit' or 'credit'
-            anomaly_status: Optional filter - 'normal', 'suspicious', 'fraud', 'pending', 'confirmed', 'expired', 'cancelled'
-                           'normal' returns transactions with no anomaly_log_id OR status='normal'
+        Get transaction logs from ai-meta-db.
+        Now includes 'orphaned' anomalies (blocked/cancelled attempts).
         """
-        # Build base query with optional join to anomaly_logs
+        # 1. Base query for transactions (with outer join to anomalies)
+        ledger_query = (
+            select(
+                self.transaction_logs_table.c.id,
+                self.transaction_logs_table.c.transaction_id,
+                self.transaction_logs_table.c.account_id,
+                self.transaction_logs_table.c.receiver_account_id,
+                self.transaction_logs_table.c.amount,
+                self.transaction_logs_table.c.transaction_type,
+                self.transaction_logs_table.c.category,
+                self.transaction_logs_table.c.description,
+                self.transaction_logs_table.c.created_at,
+                self.anomaly_logs_table.c.risk_score,
+                self.anomaly_logs_table.c.status.label('anomaly_status'),
+                self.anomaly_logs_table.c.anomaly_reasons
+            )
+            .select_from(
+                self.transaction_logs_table.outerjoin(
+                    self.anomaly_logs_table,
+                    self.transaction_logs_table.c.anomaly_log_id == self.anomaly_logs_table.c.log_id
+                )
+            )
+            .where(self.transaction_logs_table.c.account_id == account_id)
+            .order_by(self.transaction_logs_table.c.created_at.desc())
+        )
+
         if anomaly_status:
             if anomaly_status == 'normal':
-                # For 'normal' status: return transactions with NO anomaly_log_id (considered normal)
-                # OR transactions where anomaly_logs.status = 'normal'
-                # Use LEFT OUTER JOIN to include transactions without anomaly records
-                from sqlalchemy import or_
-                query = (
-                    select(
-                        self.transaction_logs_table.c.id,
-                        self.transaction_logs_table.c.transaction_id,
-                        self.transaction_logs_table.c.account_id,
-                        self.transaction_logs_table.c.receiver_account_id,
-                        self.transaction_logs_table.c.amount,
-                        self.transaction_logs_table.c.transaction_type,
-                        self.transaction_logs_table.c.category,
-                        self.transaction_logs_table.c.description,
-                        self.transaction_logs_table.c.created_at,
-                        self.anomaly_logs_table.c.risk_score,
-                        self.anomaly_logs_table.c.status.label('anomaly_status'),
-                        self.anomaly_logs_table.c.anomaly_reasons
-                    )
-                    .select_from(
-                        self.transaction_logs_table.outerjoin(
-                            self.anomaly_logs_table,
-                            self.transaction_logs_table.c.anomaly_log_id == self.anomaly_logs_table.c.log_id
-                        )
-                    )
-                    .where(
-                        and_(
-                            self.transaction_logs_table.c.account_id == account_id,
-                            or_(
-                                self.transaction_logs_table.c.anomaly_log_id == None,
-                                self.anomaly_logs_table.c.status == 'normal'
-                            )
-                        )
-                    )
-                )
+                ledger_query = ledger_query.where(or_(
+                    self.transaction_logs_table.c.anomaly_log_id == None,
+                    self.anomaly_logs_table.c.status == 'normal'
+                ))
             else:
-                # For other statuses (suspicious, fraud, etc.): require matching anomaly_logs record
-                query = (
-                    select(
-                        self.transaction_logs_table.c.id,
-                        self.transaction_logs_table.c.transaction_id,
-                        self.transaction_logs_table.c.account_id,
-                        self.transaction_logs_table.c.receiver_account_id,
-                        self.transaction_logs_table.c.amount,
-                        self.transaction_logs_table.c.transaction_type,
-                        self.transaction_logs_table.c.category,
-                        self.transaction_logs_table.c.description,
-                        self.transaction_logs_table.c.created_at,
-                        self.anomaly_logs_table.c.risk_score,
-                        self.anomaly_logs_table.c.status.label('anomaly_status'),
-                        self.anomaly_logs_table.c.anomaly_reasons
-                    )
-                    .select_from(
-                        self.transaction_logs_table.join(
-                            self.anomaly_logs_table,
-                            self.transaction_logs_table.c.anomaly_log_id == self.anomaly_logs_table.c.log_id
-                        )
-                    )
-                    .where(
-                        and_(
-                            self.transaction_logs_table.c.account_id == account_id,
-                            self.anomaly_logs_table.c.status == anomaly_status
-                        )
-                    )
-                )
-        else:
-            # Simple query without join when no anomaly filter
-            query = self.transaction_logs_table.select().where(
-                self.transaction_logs_table.c.account_id == account_id
-            )
+                ledger_query = ledger_query.where(self.anomaly_logs_table.c.status == anomaly_status)
         
-        # Add transaction_type filter if provided
         if transaction_type:
-            query = query.where(self.transaction_logs_table.c.transaction_type == transaction_type)
-        
-        # Order by created_at or id based on order parameter
-        if order == "asc":
-            query = query.order_by(self.transaction_logs_table.c.id.asc())
+            ledger_query = ledger_query.where(self.transaction_logs_table.c.transaction_type == transaction_type)
+
+        # 2. Query for orphaned anomalies (blocked/cancelled etc without transaction record)
+        # Note: We only include these if they don't have a linked transaction
+        # And usually we only show non-normal anomalies here
+        orphan_query = (
+            select(
+                self.anomaly_logs_table.c.log_id.label('id'),
+                literal(None).label('transaction_id'),
+                self.anomaly_logs_table.c.account_id,
+                self.anomaly_logs_table.c.recipient_id.label('receiver_account_id'),
+                self.anomaly_logs_table.c.amount_cents.label('amount'),
+                literal('debit').label('transaction_type'),
+                literal('Security').label('category'),
+                (literal('Blocked payment to ') + self.anomaly_logs_table.c.recipient_id).label('description'),
+                self.anomaly_logs_table.c.requested_at.label('created_at'),
+                self.anomaly_logs_table.c.risk_score,
+                self.anomaly_logs_table.c.status.label('anomaly_status'),
+                self.anomaly_logs_table.c.anomaly_reasons
+            )
+            .where(
+                and_(
+                    self.anomaly_logs_table.c.account_id == account_id,
+                    self.anomaly_logs_table.c.transaction_id == None
+                )
+            )
+            .order_by(self.anomaly_logs_table.c.requested_at.desc())
+        )
+
+        if anomaly_status:
+            # If filtering by normal, orphans won't match (as we only consider non-normal as orphans worth showing)
+            if anomaly_status == 'normal':
+                orphan_query = orphan_query.where(literal(False))
+            else:
+                orphan_query = orphan_query.where(self.anomaly_logs_table.c.status == anomaly_status)
         else:
-            query = query.order_by(self.transaction_logs_table.c.id.desc())
-        
-        # Apply limit
-        query = query.limit(limit)
-        
+            # If no filter, show all non-normal orphans
+            orphan_query = orphan_query.where(self.anomaly_logs_table.c.status != 'normal')
+
+        # Limit transaction_type to debit for orphans if filtered, since they are usually transfer attempts
+        if transaction_type and transaction_type != 'debit':
+            orphan_query = orphan_query.where(literal(False))
+
+        # Combine results
         with self.engine.connect() as conn:
-            result = conn.execute(query)
-            transactions = [dict(row._mapping) for row in result]
-            return transactions
+            ledger_rows = [dict(row._mapping) for row in conn.execute(ledger_query.limit(limit))]
+            orphan_rows = [dict(row._mapping) for row in conn.execute(orphan_query.limit(limit))]
+            
+            combined = ledger_rows + orphan_rows
+            
+            # Sort by created_at
+            reverse = (order != "asc")
+            
+            def get_sort_key(x):
+                val = x.get('created_at')
+                if not val:
+                    return datetime.min
+                # Ensure comparison works by removing timezone info if present
+                if hasattr(val, 'tzinfo') and val.tzinfo:
+                    return val.replace(tzinfo=None)
+                return val
+
+            combined.sort(key=get_sort_key, reverse=reverse)
+            return combined[:limit]
 
     def get_transaction_count(self, account_id, transaction_type=None, anomaly_status=None):
         """
-        Get total count of transactions for an account.
-        
-        Args:
-            account_id: User's account ID
-            transaction_type: Optional filter - 'debit' or 'credit'
-            anomaly_status: Optional filter - 'normal', 'suspicious', 'fraud'
-        
-        Returns:
-            Total count of matching transactions
+        Get total count of transactions for an account including orphans.
         """
-        query = select(func.count()).select_from(self.transaction_logs_table).where(
+        # Ledger count
+        ledger_count_query = select(func.count()).select_from(self.transaction_logs_table).where(
             self.transaction_logs_table.c.account_id == account_id
         )
         
-        if transaction_type:
-            query = query.where(self.transaction_logs_table.c.transaction_type == transaction_type)
-        
         if anomaly_status:
             if anomaly_status == 'normal':
-                from sqlalchemy import or_
-                # Normal means no anomaly_log_id OR status='normal'
-                # For count, we just check if anomaly_log_id is None
-                query = query.where(
-                    self.transaction_logs_table.c.anomaly_log_id == None
-                )
+                ledger_count_query = ledger_count_query.where(or_(
+                    self.transaction_logs_table.c.anomaly_log_id == None,
+                    self.transaction_logs_table.c.status == 'normal'
+                ))
             else:
-                # For other statuses, need to join
-                query = (
+                ledger_count_query = (
                     select(func.count())
                     .select_from(
                         self.transaction_logs_table.join(
@@ -233,12 +254,33 @@ class MoneyDb:
                         )
                     )
                 )
-                if transaction_type:
-                    query = query.where(self.transaction_logs_table.c.transaction_type == transaction_type)
+
+        if transaction_type:
+            ledger_count_query = ledger_count_query.where(self.transaction_logs_table.c.transaction_type == transaction_type)
+
+        # Orphan count
+        orphan_count_query = select(func.count()).select_from(self.anomaly_logs_table).where(
+            and_(
+                self.anomaly_logs_table.c.account_id == account_id,
+                self.anomaly_logs_table.c.transaction_id == None
+            )
+        )
         
+        if anomaly_status:
+            if anomaly_status == 'normal':
+                orphan_count_query = orphan_count_query.where(literal(False))
+            else:
+                orphan_count_query = orphan_count_query.where(self.anomaly_logs_table.c.status == anomaly_status)
+        else:
+            orphan_count_query = orphan_count_query.where(self.anomaly_logs_table.c.status != 'normal')
+
+        if transaction_type and transaction_type != 'debit':
+            orphan_count_query = orphan_count_query.where(literal(False))
+
         with self.engine.connect() as conn:
-            result = conn.execute(query)
-            return result.scalar() or 0
+            l_count = conn.execute(ledger_count_query).scalar() or 0
+            o_count = conn.execute(orphan_count_query).scalar() or 0
+            return l_count + o_count
 
     def create_budget(self, account_id, budget_data):
         budget_id = uuid.uuid4()

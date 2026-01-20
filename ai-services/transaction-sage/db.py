@@ -1,9 +1,9 @@
 # db.py
 import logging
-from sqlalchemy import create_engine, MetaData, Table, Column, String, Integer, Date, and_, func, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID, BIGINT, insert
+from sqlalchemy import create_engine, MetaData, Table, Column, String, Integer, Date, DateTime, and_, func, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID, BIGINT, insert, JSONB
 import uuid
-from datetime import date
+from datetime import date, datetime
 
 class TransactionDb:
     def __init__(self, uri, logger=logging):
@@ -42,9 +42,46 @@ class TransactionDb:
             Column("transaction_type", String(10)),
             Column("category", String),
             Column("description", String),
-            Column("created_at", Date, default=date.today),
+            Column("created_at", DateTime, default=datetime.utcnow),
+        )
+        self.idempotency_table = Table(
+            "idempotency_keys", self.metadata,
+            Column("key", String(255), primary_key=True),
+            Column("account_id", String(10), nullable=False),
+            Column("status", String, nullable=False, default='in_progress'),
+            Column("response_payload", JSONB), 
+            Column("created_at", DateTime, default=datetime.utcnow),
         )
         self.metadata.create_all(self.engine)
+
+    def check_idempotency_key(self, key):
+        """Check if multiple requests with same UUID are coming."""
+        query = self.idempotency_table.select().where(self.idempotency_table.c.key == key)
+        with self.engine.connect() as conn:
+            result = conn.execute(query).fetchone()
+            return result
+
+    def lock_idempotency_key(self, key, account_id):
+        """Lock the key by inserting in_progress state."""
+        stmt = insert(self.idempotency_table).values(
+            key=key,
+            account_id=account_id,
+            status='in_progress'
+        )
+        with self.engine.connect() as conn:
+            conn.execute(stmt)
+
+    def complete_idempotency_key(self, key, response_payload):
+        """Mark as completed."""
+        # PostgreSQL JSONB handles dict directly
+        stmt = self.idempotency_table.update().where(
+            self.idempotency_table.c.key == key
+        ).values(
+            status='completed',
+            response_payload=response_payload
+        )
+        with self.engine.connect() as conn:
+            conn.execute(stmt)
 
     def get_active_budget(self, account_id, category, current_date):
         query = self.budgets_table.select().where(
@@ -107,7 +144,7 @@ class TransactionDb:
         
         with self.engine.connect() as conn:
             conn.execute(debit_statement)
-            if credit_statement:
+            if credit_statement is not None:
                 conn.execute(credit_statement)
             conn.commit()
 

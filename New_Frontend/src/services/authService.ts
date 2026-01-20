@@ -62,30 +62,45 @@ class AuthService {
     const loginUri = this.getLoginUri();
     
     try {
-      // Construct URL with query parameters (matching Flask frontend pattern)
-      const url = new URL(loginUri);
-      url.searchParams.append('username', credentials.username);
-      url.searchParams.append('password', credentials.password);
+      // Build URL with query parameters
+      // For relative URLs, we need to construct the query string manually
+      const separator = loginUri.includes('?') ? '&' : '?';
+      const fullUrl = `${loginUri}${separator}username=${encodeURIComponent(credentials.username)}&password=${encodeURIComponent(credentials.password)}`;
 
-      const loginResponse = await fetch(url.toString(), {
+      console.log('Attempting login to:', fullUrl);
+
+      const loginResponse = await fetch(fullUrl, {
         method: 'GET',
         credentials: 'include',
       });
 
+      console.log('Login response status:', loginResponse.status);
+
       if (!loginResponse.ok) {
         const errorText = await loginResponse.text().catch(() => 'Login failed');
+        console.error('Login failed:', errorText);
         throw new Error(errorText || 'Login failed');
       }
 
       const data = await loginResponse.json();
+      console.log('Login response data:', data);
       const token = data.token;
 
       if (!token) {
+        console.error('No token in response:', data);
         throw new Error('No token received');
       }
 
       // Decode token to get claims (matching decode_token from Flask frontend)
-      const claims = this.decodeToken(token);
+      let claims: JWTClaims;
+      try {
+        claims = this.decodeToken(token);
+        console.log('Decoded claims:', claims);
+      } catch (decodeError) {
+        console.error('Failed to decode token:', decodeError);
+        throw decodeError;
+      }
+      
       const maxAge = claims.exp - claims.iat;
 
       // Store token in cookie (matching Flask frontend pattern)
@@ -96,7 +111,10 @@ class AuthService {
         user: claims,
       };
     } catch (error) {
-      console.error('Login error:', error);
+      console.error('Login error details:', error);
+      if (error instanceof Error) {
+        throw error;
+      }
       throw new Error('Login failed');
     }
   }
@@ -214,17 +232,18 @@ class AuthService {
       return '/api/login';
     }
 
-    // For development, use localhost proxy or direct service URL
+    // For development with Vite, always use the proxy path
+    // This avoids CORS issues by proxying through Vite dev server
     const isDevelopment = import.meta.env.DEV;
-    const userserviceAddr = import.meta.env.VITE_USERSERVICE_API_ADDR || 'userservice:8080';
     
     if (isDevelopment) {
-      // In development, proxy through Vite dev server or use localhost
-      return `/api/login`;
+      // Always use proxy path in development to avoid CORS
+      return `/userservice/login`;
     }
     
-    // In production (Kubernetes), use service name
-    return `http://${userserviceAddr}/login`;
+    // In production (Kubernetes), use service name or configured URL
+    const userserviceAddr = import.meta.env.VITE_USERSERVICE_API_ADDR || 'http://userservice:8080';
+    return `${userserviceAddr}/login`;
   }
 
   /**

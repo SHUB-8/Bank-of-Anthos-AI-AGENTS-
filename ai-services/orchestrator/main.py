@@ -554,7 +554,7 @@ async def verify_otp(req: VerifyOtpRequest, claims: Dict[str, Any] = Depends(get
             expires_dt = expires_at
         if datetime.utcnow().replace(tzinfo=None) > (expires_dt.replace(tzinfo=None)):
             db.update_confirmation_status(req.confirmation_id, "expired", conf.get("payload"))
-            db.add_notification(account_id, "OTP expired. Suspicious transaction was not executed.", "alert", {"confirmation_id": req.confirmation_id})
+            db.add_notification(account_id, "OTP expired. Pending transaction was not executed.", "alert", {"confirmation_id": req.confirmation_id})
             return {"status": "expired", "message": "OTP expired.", "remaining_attempts": 0}
     except Exception:
         pass
@@ -576,13 +576,13 @@ async def verify_otp(req: VerifyOtpRequest, claims: Dict[str, Any] = Depends(get
     # Correct OTP -> execute transaction
     txn = payload.get("transaction", {})
     try:
-        # First confirm the suspicious transaction in anomaly-sage if log_id is present
+        # First confirm the pending transaction in anomaly-sage if log_id is present
         log_id = payload.get("log_id")
         if log_id:
             try:
-                await sage_services.confirm_suspicious_transaction(log_id, authorization)
+                await sage_services.confirm_pending_transaction(log_id, authorization)
             except Exception as e:
-                logger.warning(f"Failed to confirm suspicious transaction {log_id} in anomaly-sage: {e}")
+                logger.warning(f"Failed to confirm pending transaction {log_id} in anomaly-sage: {e}")
 
         result = await sage_services.execute_transaction(
             {
@@ -597,7 +597,7 @@ async def verify_otp(req: VerifyOtpRequest, claims: Dict[str, Any] = Depends(get
             authorization
         )
         db.update_confirmation_status(req.confirmation_id, "confirmed", payload)
-        db.add_notification(account_id, "Suspicious transaction confirmed and executed successfully.", "info", {"confirmation_id": req.confirmation_id, "result": result})
+        db.add_notification(account_id, "Pending transaction confirmed and executed successfully.", "info", {"confirmation_id": req.confirmation_id, "result": result})
         return {"status": "confirmed", "message": "Transaction executed.", "remaining_attempts": max_attempts - attempts}
     except Exception as e:
         logger.error(f"OTP verification transaction error: {str(e)}")

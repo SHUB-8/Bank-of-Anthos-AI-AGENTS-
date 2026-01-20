@@ -16,35 +16,39 @@
 
 package anthos.samples.bankofanthos.ledgerwriter;
 
-import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_DUPLICATE_TRANSACTION;
-import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_INSUFFICIENT_BALANCE;
-import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_WHEN_AUTHORIZATION_HEADER_NULL;
+import java.util.Map;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.when;
-import static org.mockito.MockitoAnnotations.initMocks;
-
-import com.auth0.jwt.JWTVerifier;
-import com.auth0.jwt.exceptions.JWTVerificationException;
-import com.auth0.jwt.interfaces.Claim;
-import com.auth0.jwt.interfaces.DecodedJWT;
-import io.micrometer.core.instrument.Clock;
-import io.micrometer.core.lang.Nullable;
-import io.micrometer.stackdriver.StackdriverConfig;
-import io.micrometer.stackdriver.StackdriverMeterRegistry;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 import org.mockito.Mock;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.when;
+import static org.mockito.MockitoAnnotations.initMocks;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
+
+import com.auth0.jwt.JWTVerifier;
+import com.auth0.jwt.exceptions.JWTVerificationException;
+import com.auth0.jwt.interfaces.Claim;
+import com.auth0.jwt.interfaces.DecodedJWT;
+
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_DUPLICATE_TRANSACTION;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_INSUFFICIENT_BALANCE;
+import static anthos.samples.bankofanthos.ledgerwriter.ExceptionMessages.EXCEPTION_MESSAGE_WHEN_AUTHORIZATION_HEADER_NULL;
+import io.micrometer.core.instrument.Clock;
+import io.micrometer.core.lang.Nullable;
+import io.micrometer.stackdriver.StackdriverConfig;
+import io.micrometer.stackdriver.StackdriverMeterRegistry;
 
 class LedgerWriterControllerTest {
 
@@ -148,8 +152,11 @@ class LedgerWriterControllerTest {
 
         // Then
         assertNotNull(actualResult);
-        assertEquals(ledgerWriterController.READINESS_CODE,
-                actualResult.getBody());
+        assertTrue(actualResult.getBody() instanceof Map);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> responseBody = (Map<String, Object>) actualResult.getBody();
+        assertEquals(ledgerWriterController.READINESS_CODE, responseBody.get("status"));
+        assertNotNull(responseBody.get("transaction_id"));
         assertEquals(HttpStatus.CREATED, actualResult.getStatusCode());
     }
 
@@ -175,8 +182,11 @@ class LedgerWriterControllerTest {
 
         // Then
         assertNotNull(actualResult);
-        assertEquals(ledgerWriterController.READINESS_CODE,
-                actualResult.getBody());
+        assertTrue(actualResult.getBody() instanceof Map);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> responseBody = (Map<String, Object>) actualResult.getBody();
+        assertEquals(ledgerWriterController.READINESS_CODE, responseBody.get("status"));
+        assertNotNull(responseBody.get("transaction_id"));
         assertEquals(HttpStatus.CREATED, actualResult.getStatusCode());
     }
 
@@ -202,8 +212,11 @@ class LedgerWriterControllerTest {
 
         // Then
         assertNotNull(actualResult);
-        assertEquals(ledgerWriterController.READINESS_CODE,
-                actualResult.getBody());
+        assertTrue(actualResult.getBody() instanceof Map);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> responseBody = (Map<String, Object>) actualResult.getBody();
+        assertEquals(ledgerWriterController.READINESS_CODE, responseBody.get("status"));
+        assertNotNull(responseBody.get("transaction_id"));
         assertEquals(HttpStatus.CREATED, actualResult.getStatusCode());
     }
 
@@ -393,8 +406,10 @@ class LedgerWriterControllerTest {
 
         // Then
         assertNotNull(originalResult);
-        assertEquals(ledgerWriterController.READINESS_CODE,
-                originalResult.getBody());
+        assertTrue(originalResult.getBody() instanceof Map);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> responseBody = (Map<String, Object>) originalResult.getBody();
+        assertEquals(ledgerWriterController.READINESS_CODE, responseBody.get("status"));
         assertEquals(HttpStatus.CREATED, originalResult.getStatusCode());
 
         assertNotNull(duplicateResult);

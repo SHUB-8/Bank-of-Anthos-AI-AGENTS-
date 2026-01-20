@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { contactSageAPI } from '../api/ai_agents.js';
 import Modal from '../components/Modal.jsx';
 import LoadingSpinner from '../components/LoadingSpinner.jsx';
-import { Search, Plus, Edit3, Trash2, User, ExternalLink, Mail, Phone } from 'lucide-react';
+import { Search, Plus, Edit3, Trash2, User, ExternalLink, Mail, Phone, CreditCard, AlertCircle } from 'lucide-react';
 
 const Contacts = () => {
   const [contacts, setContacts] = useState([]);
@@ -11,8 +11,11 @@ const Contacts = () => {
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingContact, setEditingContact] = useState(null);
+  const [formError, setFormError] = useState('');
   const [formData, setFormData] = useState({
     name: '',
+    accountNumber: '',
+    routingNumber: '',
     email: '',
     phone: '',
     isExternal: false
@@ -44,14 +47,20 @@ const Contacts = () => {
     }
 
     try {
-      const results = await contactSageAPI.fuzzySearch(query);
-      setFilteredContacts(results);
+      // Pass all contacts as fallback for local filtering
+      const results = await contactSageAPI.fuzzySearch(query, contacts);
+      setFilteredContacts(results.length > 0 ? results : contacts.filter(contact =>
+        contact.name.toLowerCase().includes(query.toLowerCase()) ||
+        (contact.email && contact.email.toLowerCase().includes(query.toLowerCase())) ||
+        (contact.accountNumber && contact.accountNumber.includes(query))
+      ));
     } catch (error) {
       console.error('Search failed:', error);
       // Fallback to local filtering
       const filtered = contacts.filter(contact =>
         contact.name.toLowerCase().includes(query.toLowerCase()) ||
-        contact.email.toLowerCase().includes(query.toLowerCase())
+        (contact.email && contact.email.toLowerCase().includes(query.toLowerCase())) ||
+        (contact.accountNumber && contact.accountNumber.includes(query))
       );
       setFilteredContacts(filtered);
     }
@@ -59,16 +68,20 @@ const Contacts = () => {
 
   const handleCreateContact = () => {
     setEditingContact(null);
-    setFormData({ name: '', email: '', phone: '', isExternal: false });
+    setFormError('');
+    setFormData({ name: '', accountNumber: '', routingNumber: '', email: '', phone: '', isExternal: false });
     setModalOpen(true);
   };
 
   const handleEditContact = (contact) => {
     setEditingContact(contact);
+    setFormError('');
     setFormData({
       name: contact.name,
-      email: contact.email,
-      phone: contact.phone,
+      accountNumber: contact.accountNumber || '',
+      routingNumber: contact.routingNumber || '',
+      email: contact.email || '',
+      phone: contact.phone || '',
       isExternal: contact.isExternal
     });
     setModalOpen(true);
@@ -76,6 +89,8 @@ const Contacts = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setFormError('');
+    
     try {
       if (editingContact) {
         const updatedContact = await contactSageAPI.updateContact(editingContact.id, formData);
@@ -86,9 +101,10 @@ const Contacts = () => {
       }
 
       setModalOpen(false);
-      setFormData({ name: '', email: '', phone: '', isExternal: false });
+      setFormData({ name: '', accountNumber: '', routingNumber: '', email: '', phone: '', isExternal: false });
     } catch (error) {
       console.error('Failed to save contact:', error);
+      setFormError(error.message || 'Failed to save contact. Please check your inputs.');
     }
   };
 
@@ -235,18 +251,29 @@ const Contacts = () => {
 
             <div className="space-y-3">
               <div className="flex items-center space-x-3 text-sm text-gray-600">
-                <Mail className="h-4 w-4" />
-                <a href={`mailto:${contact.email}`} className="hover:text-blue-600 truncate">
-                  {contact.email}
-                </a>
+                <CreditCard className="h-4 w-4" />
+                <span className="font-mono">
+                  Account: {contact.accountNumber || 'N/A'}
+                </span>
               </div>
               
-              <div className="flex items-center space-x-3 text-sm text-gray-600">
-                <Phone className="h-4 w-4" />
-                <a href={`tel:${contact.phone}`} className="hover:text-blue-600">
-                  {contact.phone}
-                </a>
-              </div>
+              {contact.email && (
+                <div className="flex items-center space-x-3 text-sm text-gray-600">
+                  <Mail className="h-4 w-4" />
+                  <a href={`mailto:${contact.email}`} className="hover:text-blue-600 truncate">
+                    {contact.email}
+                  </a>
+                </div>
+              )}
+              
+              {contact.phone && (
+                <div className="flex items-center space-x-3 text-sm text-gray-600">
+                  <Phone className="h-4 w-4" />
+                  <a href={`tel:${contact.phone}`} className="hover:text-blue-600">
+                    {contact.phone}
+                  </a>
+                </div>
+              )}
             </div>
           </div>
         ))}
@@ -283,9 +310,16 @@ const Contacts = () => {
         title={editingContact ? 'Edit Contact' : 'Add New Contact'}
       >
         <form onSubmit={handleSubmit} className="space-y-4">
+          {formError && (
+            <div className="flex items-center space-x-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700">
+              <AlertCircle className="h-5 w-5 flex-shrink-0" />
+              <span className="text-sm">{formError}</span>
+            </div>
+          )}
+          
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Name
+              Name / Label <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
@@ -299,7 +333,39 @@ const Contacts = () => {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Email
+              Account Number <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={formData.accountNumber}
+              onChange={(e) => setFormData(prev => ({ ...prev, accountNumber: e.target.value.replace(/\D/g, '').slice(0, 10) }))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              placeholder="1234567890"
+              maxLength={10}
+              pattern="\d{10}"
+              required
+            />
+            <p className="text-xs text-gray-500 mt-1">Must be exactly 10 digits ({formData.accountNumber.length}/10)</p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Routing Number
+            </label>
+            <input
+              type="text"
+              value={formData.routingNumber}
+              onChange={(e) => setFormData(prev => ({ ...prev, routingNumber: e.target.value.replace(/\D/g, '').slice(0, 9) }))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              placeholder="883745000"
+              maxLength={9}
+            />
+            <p className="text-xs text-gray-500 mt-1">Leave empty for Bank of Anthos default (883745000). Must be 9 digits if specified.</p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Email (optional)
             </label>
             <input
               type="email"
@@ -307,16 +373,12 @@ const Contacts = () => {
               onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               placeholder="john@example.com"
-              required
             />
-            {formData.email && !validateEmail(formData.email) && (
-              <p className="text-red-600 text-xs mt-1">Please enter a valid email address</p>
-            )}
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Phone
+              Phone (optional)
             </label>
             <input
               type="tel"
@@ -324,11 +386,7 @@ const Contacts = () => {
               onChange={(e) => setFormData(prev => ({ ...prev, phone: e.target.value }))}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               placeholder="+1-555-0123"
-              required
             />
-            {formData.phone && !validatePhone(formData.phone.replace(/[\s\-\(\)]/g, '')) && (
-              <p className="text-red-600 text-xs mt-1">Please enter a valid phone number</p>
-            )}
           </div>
 
           <div className="flex items-center">
@@ -336,21 +394,32 @@ const Contacts = () => {
               type="checkbox"
               id="isExternal"
               checked={formData.isExternal}
-              onChange={(e) => setFormData(prev => ({ ...prev, isExternal: e.target.checked }))}
+              onChange={(e) => {
+                const isExt = e.target.checked;
+                setFormData(prev => ({ 
+                  ...prev, 
+                  isExternal: isExt,
+                  // Clear routing if switching to external (can't use local routing)
+                  routingNumber: isExt ? (prev.routingNumber === '' || prev.routingNumber === '883745000' ? '' : prev.routingNumber) : prev.routingNumber
+                }));
+              }}
               className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
             />
             <label htmlFor="isExternal" className="ml-2 text-sm text-gray-700">
-              Is external contact?
+              External contact (outside Bank of Anthos)
             </label>
           </div>
           <p className="text-xs text-gray-500">
-            External contacts are people outside your organization
+            {formData.isExternal 
+              ? "⚠️ External contacts require a different bank's routing number (not 883745000)"
+              : "Internal contacts use Bank of Anthos routing (883745000)"
+            }
           </p>
 
           <div className="flex space-x-3 pt-4">
             <button
               type="submit"
-              disabled={!validateEmail(formData.email) || !validatePhone(formData.phone.replace(/[\s\-\(\)]/g, ''))}
+              disabled={!formData.name || !formData.accountNumber || formData.accountNumber.length !== 10}
               className="flex-1 bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {editingContact ? 'Update Contact' : 'Add Contact'}

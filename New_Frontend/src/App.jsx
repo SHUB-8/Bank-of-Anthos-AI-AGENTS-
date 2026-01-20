@@ -9,6 +9,7 @@ import Chat from './pages/Chat.jsx';
 import Transactions from './pages/Transactions.jsx';
 import Budgets from './pages/Budgets.jsx';
 import Contacts from './pages/Contacts.jsx';
+import Payments from './pages/Payments.jsx';
 
 function App() {
   return (
@@ -28,6 +29,7 @@ function App() {
                   <Route path="/transactions" element={<Transactions />} />
                   <Route path="/budgets" element={<Budgets />} />
                   <Route path="/contacts" element={<Contacts />} />
+                  <Route path="/payments" element={<Payments />} />
                 </Routes>
               </Layout>
             </ProtectedRoute>

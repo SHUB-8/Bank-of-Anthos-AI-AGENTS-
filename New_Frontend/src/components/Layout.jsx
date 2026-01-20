@@ -11,7 +11,8 @@ import {
   Bell,
   Settings,
   User,
-  LogOut
+  LogOut,
+  Send
 } from 'lucide-react';
 
 const Layout = ({ children }) => {
@@ -21,6 +22,7 @@ const Layout = ({ children }) => {
   const navigation = [
     { name: 'Dashboard', href: '/', icon: LayoutDashboard },
     { name: 'Chat', href: '/chat', icon: MessageCircle },
+    { name: 'Payments', href: '/payments', icon: Send },
     { name: 'Transactions', href: '/transactions', icon: CreditCard },
     { name: 'Budgets', href: '/budgets', icon: Target },
     { name: 'Contacts', href: '/contacts', icon: Users },

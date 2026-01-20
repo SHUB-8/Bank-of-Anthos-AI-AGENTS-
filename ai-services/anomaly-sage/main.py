@@ -1,8 +1,10 @@
 import os
 import sys
 import logging
+import asyncio
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
+from contextlib import asynccontextmanager
 
 import httpx
 from dotenv import load_dotenv
@@ -21,6 +23,7 @@ AI_META_DB_URI = os.getenv("AI_META_DB_URI")
 ACCOUNTS_DB_URI = os.getenv("ACCOUNTS_DB_URI")
 BALANCE_READER_URL = os.getenv("BALANCE_READER_URL")
 TRANSACTION_HISTORY_URL = os.getenv("TRANSACTION_HISTORY_URL")
+EXPIRY_CHECK_INTERVAL = int(os.getenv("EXPIRY_CHECK_INTERVAL", "60"))  # seconds
 
 # --- Pydantic Models ---
 class AnomalyRequest(BaseModel):
@@ -30,103 +33,155 @@ class AnomalyRequest(BaseModel):
     is_external: bool
 
 class AnomalyResponse(BaseModel):
+    """
+    Response from anomaly detection.
+    Status values: 'normal', 'pending', 'fraud'
+    - normal: Transaction can proceed immediately
+    - pending: Transaction requires user confirmation (24h TTL)
+    - fraud: Transaction is blocked
+    """
     account_id: str
     risk_score: float
-    status: str
+    status: str  # 'normal', 'pending', 'fraud'
     reasons: List[str]
     log_id: Optional[str] = None
+    expires_at: Optional[str] = None  # ISO timestamp for pending transactions
 
 class LinkTransactionRequest(BaseModel):
     log_id: str
     transaction_id: int
 
-# --- FastAPI App ---
-app = FastAPI(title="Anomaly-Sage", version="1.0") 
+class UpdateProfileRequest(BaseModel):
+    """Request to update user profile after successful transaction."""
+    account_id: str
+    amount_cents: int
+    balance_cents: Optional[int] = None
 
 # --- Global Clients ---
 client = httpx.AsyncClient()
-db = AnomalyDb(AI_META_DB_URI, ACCOUNTS_DB_URI, logging)
+db: Optional[AnomalyDb] = None
+
+# --- Background Task for Expiring Pending Transactions ---
+async def expire_pending_transactions_task():
+    """Background task that periodically expires pending transactions."""
+    while True:
+        try:
+            await asyncio.sleep(EXPIRY_CHECK_INTERVAL)
+            if db:
+                expired_count = db.expire_pending_transactions()
+                if expired_count > 0:
+                    logging.info(f"Background task: Expired {expired_count} pending transactions")
+        except asyncio.CancelledError:
+            logging.info("Expiry background task cancelled")
+            break
+        except Exception as e:
+            logging.error(f"Error in expiry background task: {e}")
+
+# --- Lifespan Context Manager ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application lifecycle - startup and shutdown."""
+    global db
+    
+    # Startup
+    logging.info("Starting Anomaly-Sage service...")
+    db = AnomalyDb(AI_META_DB_URI, ACCOUNTS_DB_URI, logging)
+    
+    # Start background task for expiring pending transactions
+    expiry_task = asyncio.create_task(expire_pending_transactions_task())
+    logging.info(f"Started expiry background task (interval: {EXPIRY_CHECK_INTERVAL}s)")
+    
+    yield
+    
+    # Shutdown
+    logging.info("Shutting down Anomaly-Sage service...")
+    expiry_task.cancel()
+    try:
+        await expiry_task
+    except asyncio.CancelledError:
+        pass
+
+# --- FastAPI App ---
+app = FastAPI(
+    title="Anomaly-Sage", 
+    version="2.0.0",
+    description="Z-score based anomaly detection with scalable user profiling",
+    lifespan=lifespan
+)
 
 # --- API Endpoints ---
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "service": "anomaly-sage"}
+    return {"status": "healthy", "service": "anomaly-sage", "version": "2.0.0"}
 
-async def _get_balance(account_id: str, auth_header: str):
+async def _get_balance(account_id: str, auth_header: str) -> float:
+    """Get account balance in dollars."""
     url = f"{BALANCE_READER_URL}/balances/{account_id}"
     resp = await client.get(url, headers={"Authorization": auth_header})
     resp.raise_for_status()
     return resp.json()
 
-async def _get_transactions(account_id: str, auth_header: str):
+async def _get_transactions(account_id: str, auth_header: str) -> List[Dict]:
+    """Get transaction history for profile building."""
     url = f"{TRANSACTION_HISTORY_URL}/transactions/{account_id}"
     resp = await client.get(url, headers={"Authorization": auth_header})
     resp.raise_for_status()
     return resp.json()
 
 @app.post("/detect-anomaly", response_model=AnomalyResponse)
-async def detect_anomaly(req: AnomalyRequest, claims: Dict[str, Any] = Depends(get_current_user_claims), authorization: Optional[str] = Header(None)):
-    risk_score = 0.0
-    reasons = []
+async def detect_anomaly(
+    req: AnomalyRequest, 
+    claims: Dict[str, Any] = Depends(get_current_user_claims), 
+    authorization: Optional[str] = Header(None)
+):
+    """
+    Detect anomalies using Z-score based analysis.
+    
+    Returns:
+    - status='normal': Transaction can proceed immediately
+    - status='pending': Transaction flagged, requires user confirmation (24h TTL)
+    - status='fraud': Transaction blocked
+    """
     username = claims.get("user") or claims.get("username")
 
     try:
-        # 0. Check for existing confirmed transaction
-        confirmed_txn = db.get_recent_confirmed_transaction(req.account_id, req.recipient_id, req.amount_cents)
+        # 0. Check for existing confirmed transaction (user already approved)
+        confirmed_txn = db.get_recent_confirmed_transaction(
+            req.account_id, req.recipient_id, req.amount_cents
+        )
         if confirmed_txn:
+            logging.info(f"Found recently confirmed transaction for {req.account_id}")
             return AnomalyResponse(
                 account_id=req.account_id,
                 risk_score=confirmed_txn['risk_score'],
-                status="normal", # Allow execution
+                status="normal",  # Allow execution since user confirmed
                 reasons=["Transaction previously confirmed by user."],
                 log_id=str(confirmed_txn['log_id'])
             )
 
         # 1. Gather Data
         balance_dollars = await _get_balance(req.account_id, authorization)
+        balance_cents = int(balance_dollars * 100)
         transactions = await _get_transactions(req.account_id, authorization)
-        # THIS IS THE FIX: Added the missing 'username' argument to the function call.
+        
+        # 2. Get or create user profile (scalable - uses incremental stats)
         profile = db.get_or_create_user_profile(req.account_id, transactions, username)
 
-        # 2. Apply Rules & Calculate Score
-        mean_cents = profile.get('mean_txn_amount_cents', 5000)
-        stddev_cents = profile.get('stddev_txn_amount_cents', 2500)
+        # 3. Calculate risk using Z-scores
+        risk_result = db.calculate_risk_factors(
+            account_id=req.account_id,
+            amount_cents=req.amount_cents,
+            balance_cents=balance_cents,
+            recipient_id=req.recipient_id,
+            username=username,
+            profile=profile
+        )
         
-        if stddev_cents > 0:
-            deviation = (req.amount_cents - mean_cents) / stddev_cents
-            if deviation > profile.get('threshold_fraud_multiplier', 3.0):
-                risk_score += 0.7
-                reasons.append(f"Transaction amount is unusually high ({deviation:.1f}x the user's average).")
-            elif deviation > profile.get('threshold_suspicious_multiplier', 2.0):
-                risk_score += 0.4
-                reasons.append(f"Transaction amount is higher than average ({deviation:.1f}x).")
-
-        if req.amount_cents > (balance_dollars * 100) * 0.9:
-            risk_score += 0.4
-            reasons.append("Transaction would use over 90% of the current balance.")
-
-        current_utc_hour = datetime.now(timezone.utc).hour
-        active_hours = profile.get('active_hours', list(range(8, 23)))
-        if current_utc_hour not in active_hours:
-            risk_score += 0.3
-            reasons.append(f"Transaction occurred at an unusual time ({current_utc_hour}:00 UTC).")
-
-        if not db.check_recipient_in_contacts(username, req.recipient_id):
-            risk_score += 0.1
-            reasons.append("Recipient is not in the user's saved contact list.")
+        risk_score = risk_result['risk_score']
+        status = risk_result['status']  # 'normal', 'pending', or 'fraud'
+        reasons = risk_result['reasons']
         
-        # 3. Classify
-        if risk_score >= 0.7:
-            status = "fraud"
-        elif risk_score >= 0.4:
-            status = "suspicious"
-        else:
-            status = "normal"
-        
-        if not reasons and status == "normal":
-            reasons.append("Transaction matches typical user behavior.")
-        
-        # 4. Log and Return
+        # 4. Log the anomaly check
         log_id = db.log_anomaly_check(
             account_id=req.account_id,
             recipient_id=req.recipient_id,
@@ -135,60 +190,162 @@ async def detect_anomaly(req: AnomalyRequest, claims: Dict[str, Any] = Depends(g
             status=status,
             anomaly_reasons=reasons
         )
-        return AnomalyResponse(
+        
+        # 5. Build response
+        response = AnomalyResponse(
             account_id=req.account_id,
             risk_score=risk_score,
             status=status,
             reasons=reasons,
             log_id=log_id
         )
+        
+        # Add expiry time for pending transactions
+        if status == "pending":
+            from datetime import timedelta
+            expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+            response.expires_at = expires_at.isoformat()
+        
+        logging.info(f"Anomaly detection: account={req.account_id}, status={status}, risk={risk_score:.2f}")
+        return response
 
     except (httpx.HTTPStatusError, SQLAlchemyError) as e:
         logging.error(f"Error during anomaly detection: {e}")
         raise HTTPException(status_code=500, detail="Error communicating with backend services.")
 
-@app.post("/confirm-suspicious/{log_id}")
-async def confirm_suspicious(log_id: str, claims: Dict[str, Any] = Depends(get_current_user_claims)):
-    """Confirms a suspicious transaction, allowing it to proceed."""
+@app.post("/confirm-pending/{log_id}")
+async def confirm_pending(log_id: str, claims: Dict[str, Any] = Depends(get_current_user_claims)):
+    """
+    Confirm a pending transaction, allowing it to proceed.
+    Status changes: pending -> confirmed
+    """
     try:
-        # Verify the transaction exists and belongs to this user
-        transaction = db.get_suspicious_transaction(log_id)
+        # Verify the transaction exists and is pending
+        transaction = db.get_pending_transaction(log_id)
         if not transaction:
-            raise HTTPException(status_code=404, detail="Suspicious transaction not found or already processed.")
+            raise HTTPException(
+                status_code=404, 
+                detail="Pending transaction not found, already processed, or expired."
+            )
         
-        username = claims.get("user") or claims.get("username")
-        # Could add additional verification that transaction.account_id matches user's account
+        # Verify ownership
+        user_account = claims.get("acct")
+        if user_account and transaction.get('account_id') != user_account:
+            raise HTTPException(status_code=403, detail="Not authorized to confirm this transaction.")
         
-        success = db.confirm_suspicious_transaction(log_id)
+        success = db.confirm_pending_transaction(log_id)
         if success:
-            return {"status": "confirmed", "log_id": log_id, "message": "Transaction confirmed and ready to execute."}
+            logging.info(f"Transaction {log_id} confirmed by user")
+            return {
+                "status": "confirmed", 
+                "log_id": log_id, 
+                "message": "Transaction confirmed and ready to execute."
+            }
         else:
             raise HTTPException(status_code=500, detail="Failed to confirm transaction.")
+            
     except SQLAlchemyError as e:
-        logging.error(f"Error confirming suspicious transaction: {e}")
+        logging.error(f"Error confirming transaction: {e}")
         raise HTTPException(status_code=500, detail="Database error.")
 
-@app.post("/cancel-suspicious/{log_id}")
-async def cancel_suspicious(log_id: str, claims: Dict[str, Any] = Depends(get_current_user_claims)):
-    """Cancels a suspicious transaction, preventing execution."""
+@app.post("/cancel-pending/{log_id}")
+async def cancel_pending(log_id: str, claims: Dict[str, Any] = Depends(get_current_user_claims)):
+    """
+    Cancel a pending transaction, preventing execution.
+    Status changes: pending -> cancelled
+    """
     try:
-        transaction = db.get_suspicious_transaction(log_id)
+        transaction = db.get_pending_transaction(log_id)
         if not transaction:
-            raise HTTPException(status_code=404, detail="Suspicious transaction not found or already processed.")
+            raise HTTPException(
+                status_code=404, 
+                detail="Pending transaction not found, already processed, or expired."
+            )
         
-        success = db.cancel_suspicious_transaction(log_id)
+        # Verify ownership
+        user_account = claims.get("acct")
+        if user_account and transaction.get('account_id') != user_account:
+            raise HTTPException(status_code=403, detail="Not authorized to cancel this transaction.")
+        
+        success = db.cancel_pending_transaction(log_id)
         if success:
-            return {"status": "cancelled", "log_id": log_id, "message": "Transaction cancelled."}
+            logging.info(f"Transaction {log_id} cancelled by user")
+            return {
+                "status": "cancelled", 
+                "log_id": log_id, 
+                "message": "Transaction cancelled."
+            }
         else:
             raise HTTPException(status_code=500, detail="Failed to cancel transaction.")
+            
     except SQLAlchemyError as e:
-        logging.error(f"Error cancelling suspicious transaction: {e}")
+        logging.error(f"Error cancelling transaction: {e}")
         raise HTTPException(status_code=500, detail="Database error.")
+
+@app.post("/update-profile")
+async def update_profile(req: UpdateProfileRequest, claims: Dict[str, Any] = Depends(get_current_user_claims)):
+    """
+    Update user profile after a successful transaction.
+    This uses Welford's algorithm for O(1) incremental updates.
+    Called by transaction-sage after successful execution.
+    """
+    try:
+        success = db.update_profile_after_transaction(
+            account_id=req.account_id,
+            amount_cents=req.amount_cents,
+            balance_cents=req.balance_cents
+        )
+        if success:
+            return {"status": "updated", "account_id": req.account_id}
+        else:
+            return {"status": "skipped", "message": "Profile not found or update failed"}
+    except Exception as e:
+        logging.error(f"Error updating profile: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update profile.")
+
+@app.get("/anomalies/{account_id}")
+async def get_anomalies(
+    account_id: str, 
+    limit: int = 50, 
+    claims: Dict[str, Any] = Depends(get_current_user_claims)
+):
+    """Retrieve anomaly logs for a specific account."""
+    user_account = claims.get("acct")
+    if user_account != account_id:
+        raise HTTPException(status_code=403, detail="Unauthorized access to account logs.")
+    
+    anomalies = db.get_anomalies_for_account(account_id, limit)
+    return {"anomalies": anomalies, "count": len(anomalies)}
 
 @app.post("/link-transaction")
 async def link_transaction(req: LinkTransactionRequest):
-    """Links a transaction ID to an anomaly log entry."""
+    """Link a transaction ID to an anomaly log entry after execution."""
     success = db.link_transaction_to_anomaly(req.log_id, req.transaction_id)
     if not success:
         raise HTTPException(status_code=404, detail="Log not found or update failed")
-    return {"status": "linked"}
+    return {"status": "linked", "log_id": req.log_id, "transaction_id": req.transaction_id}
+
+@app.post("/expire-pending")
+async def manually_expire_pending():
+    """
+    Manually trigger expiration of pending transactions.
+    Useful for testing or manual cleanup.
+    """
+    count = db.expire_pending_transactions()
+    return {"status": "completed", "expired_count": count}
+
+# ==========================================================================
+# LEGACY ENDPOINTS (Deprecated - for backward compatibility)
+# ==========================================================================
+
+@app.post("/confirm-suspicious/{log_id}")
+async def confirm_suspicious(log_id: str, claims: Dict[str, Any] = Depends(get_current_user_claims)):
+    """DEPRECATED: Use /confirm-pending/{log_id} instead."""
+    logging.warning("Deprecated endpoint /confirm-suspicious used. Please migrate to /confirm-pending")
+    return await confirm_pending(log_id, claims)
+
+@app.post("/cancel-suspicious/{log_id}")
+async def cancel_suspicious(log_id: str, claims: Dict[str, Any] = Depends(get_current_user_claims)):
+    """DEPRECATED: Use /cancel-pending/{log_id} instead."""
+    logging.warning("Deprecated endpoint /cancel-suspicious used. Please migrate to /cancel-pending")
+    return await cancel_pending(log_id, claims)

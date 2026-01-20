@@ -1,10 +1,10 @@
-# services.py
 """
 Service integration layer for calling other sage microservices
 """
 import httpx
 import logging
 from typing import Dict, List, Any, Optional
+import uuid
 
 class SageServices:
     """Handles HTTP calls to all sage microservices"""
@@ -119,7 +119,7 @@ class SageServices:
             limit: Maximum number of transactions to return (default 5)
             order: Sort order - 'desc' for newest first (default), 'asc' for oldest first
             transaction_type: Optional filter - 'debit' or 'credit'
-            anomaly_status: Optional filter - 'normal', 'suspicious', 'fraud'
+            anomaly_status: Optional filter - 'normal', 'pending', 'confirmed', 'cancelled', 'expired', 'fraud'
             include_total: If True, also fetch total transaction count
         """
         # Build query parameters
@@ -127,6 +127,9 @@ class SageServices:
         if transaction_type:
             params.append(f"transaction_type={transaction_type}")
         if anomaly_status:
+            # Match new status names
+            if anomaly_status == 'suspicious':
+                anomaly_status = 'pending'
             params.append(f"anomaly_status={anomaly_status}")
         
         query_string = "&".join(params)
@@ -197,10 +200,19 @@ class SageServices:
         url = f"{self.anomaly_sage_url}/detect-anomaly"
         return await self._make_request("POST", url, auth_header, data)
 
-    async def confirm_suspicious_transaction(self, log_id: str, auth_header: str) -> Dict[str, Any]:
-        """Confirm a suspicious transaction in anomaly-sage"""
-        url = f"{self.anomaly_sage_url}/confirm-suspicious/{log_id}"
+    async def confirm_pending_transaction(self, log_id: str, auth_header: str) -> Dict[str, Any]:
+        """Confirm a pending transaction in anomaly-sage"""
+        url = f"{self.anomaly_sage_url}/confirm-pending/{log_id}"
         return await self._make_request("POST", url, auth_header)
+
+    async def cancel_pending_transaction(self, log_id: str, auth_header: str) -> Dict[str, Any]:
+        """Cancel a pending transaction in anomaly-sage"""
+        url = f"{self.anomaly_sage_url}/cancel-pending/{log_id}"
+        return await self._make_request("POST", url, auth_header)
+
+    async def confirm_suspicious_transaction(self, log_id: str, auth_header: str) -> Dict[str, Any]:
+        """DEPRECATED: Use confirm_pending_transaction. Maintains compat for old calls."""
+        return await self.confirm_pending_transaction(log_id, auth_header)
 
     # Transaction Sage Methods
     async def execute_transaction(self, transaction_data: Dict[str, Any], 
@@ -213,10 +225,24 @@ class SageServices:
             "recipient_routing_num": transaction_data.get("toRoutingNum") or transaction_data.get("recipient_routing_num"),
             "amount_cents": transaction_data.get("amount") or transaction_data.get("amount_cents"),
             "description": transaction_data.get("description", ""),
+            "category": transaction_data.get("category"),
             "is_external": transaction_data.get("is_external", False),
             "uuid": transaction_data.get("uuid") or transaction_data.get("request_uuid")
         }
         url = f"{self.transaction_sage_url}/v1/execute-transaction"
+        return await self._make_request("POST", url, auth_header, mapped_payload)
+
+    async def deposit_funds(self, deposit_data: Dict[str, Any], auth_header: str) -> Dict[str, Any]:
+        """Execute a deposit from external account"""
+        mapped_payload = {
+            "account_id": deposit_data.get("account_id"),
+            "external_account_id": deposit_data.get("external_account_id"),
+            "external_routing_num": deposit_data.get("external_routing_num"),
+            "amount_cents": deposit_data.get("amount_cents"),
+            "description": deposit_data.get("description", "Deposit via Assistant"),
+            "uuid": deposit_data.get("uuid", str(uuid.uuid4()))
+        }
+        url = f"{self.transaction_sage_url}/v1/deposit"
         return await self._make_request("POST", url, auth_header, mapped_payload)
 
     # Health check methods for monitoring
