@@ -605,14 +605,14 @@ export const moneySageAPI = {
 
       const data = await response.json();
       // Transform to frontend format with colors
-      // Note: Backend stores values in cents, convert to dollars for display
+      // Note: Backend now returns dollars
       const colors = ['#10B981', '#F59E0B', '#EF4444', '#3B82F6', '#8B5CF6', '#06B6D4'];
       return (data || []).map((budget, index) => ({
         id: budget.id,
         name: budget.category,
         category: budget.category,
-        limit: budget.budget_limit / 100, // Convert cents to dollars
-        spent: (budget.spent || 0) / 100, // Convert cents to dollars
+        limit: budget.budget_limit, 
+        spent: (budget.spent || 0), 
         color: colors[index % colors.length],
         periodStart: budget.period_start,
         periodEnd: budget.period_end
@@ -640,15 +640,14 @@ export const moneySageAPI = {
     const periodEnd = budgetData.periodEnd || new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
 
     try {
-      // Convert dollars to cents for backend
-      const limitInCents = Math.round(budgetData.limit * 100);
+      // Backend expects dollars now
       
       const response = await fetch(url, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
           category: budgetData.name || budgetData.category,
-          budget_limit: limitInCents,
+          budget_limit: budgetData.limit,
           period_start: periodStart,
           period_end: periodEnd
         })
@@ -664,7 +663,7 @@ export const moneySageAPI = {
         id: data.id,
         name: data.category,
         category: data.category,
-        limit: data.budget_limit / 100, // Convert cents back to dollars
+        limit: data.budget_limit,
         spent: 0,
         color: budgetData.color || '#3B82F6',
         periodStart: data.period_start,
@@ -690,14 +689,15 @@ export const moneySageAPI = {
     const url = `${getMoneySageUrl()}/budgets/${claims.acct}/${encodeURIComponent(category)}`;
     
     try {
-      // Convert dollars to cents for backend
-      const limitInCents = budgetData.limit ? Math.round(budgetData.limit * 100) : undefined;
+      // Backend expects dollars now
+      const limit = budgetData.limit;
       
       const response = await fetch(url, {
         method: 'PUT',
         headers: getAuthHeaders(),
         body: JSON.stringify({
-          budget_limit: limitInCents,
+          category: budgetData.name || budgetData.category,
+          budget_limit: limit,
           period_start: budgetData.periodStart,
           period_end: budgetData.periodEnd
         })
@@ -713,8 +713,8 @@ export const moneySageAPI = {
         id: data.id,
         name: data.category,
         category: data.category,
-        limit: data.budget_limit / 100, // Convert cents back to dollars
-        spent: (data.spent || 0) / 100,
+        limit: data.budget_limit, 
+        spent: (data.spent || 0),
         color: budgetData.color || '#3B82F6',
         periodStart: data.period_start,
         periodEnd: data.period_end

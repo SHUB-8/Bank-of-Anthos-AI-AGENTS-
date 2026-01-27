@@ -84,7 +84,8 @@ const Budgets = () => {
       };
 
       if (editingBudget) {
-        const updatedBudget = await moneySageAPI.updateBudget(editingBudget.id, {
+        // Pass the original category name (editingBudget.category) to identify the budget
+        const updatedBudget = await moneySageAPI.updateBudget(editingBudget.category, {
           ...budgetData,
           periodStart: formData.periodStart,
           periodEnd: formData.periodEnd

@@ -206,7 +206,7 @@ def create_gemini_tools():
             "properties": {
                 "account_id": {"type": "string", "description": "The user's account ID"},
                 "category": {"type": "string", "description": "Budget category (e.g., Dining, Groceries)"},
-                "budget_limit": {"type": "number", "description": "Budget limit amount"},
+                "budget_limit": {"type": "number", "description": "Budget limit amount in dollars (e.g. 500 for $500)"},
                 "period_start": {"type": "string", "description": "Budget period start date (YYYY-MM-DD)"},
                 "period_end": {"type": "string", "description": "Budget period end date (YYYY-MM-DD)"}
             },
@@ -222,7 +222,7 @@ def create_gemini_tools():
             "properties": {
                 "account_id": {"type": "string", "description": "The user's account ID"},
                 "category": {"type": "string", "description": "Budget category to update"},
-                "budget_limit": {"type": "number", "description": "New budget limit amount (optional)"},
+                "budget_limit": {"type": "number", "description": "New budget limit amount in dollars (e.g. 500 for $500) (optional)"},
                 "period_start": {"type": "string", "description": "New start date (YYYY-MM-DD) (optional)"},
                 "period_end": {"type": "string", "description": "New end date (YYYY-MM-DD) (optional)"}
             },

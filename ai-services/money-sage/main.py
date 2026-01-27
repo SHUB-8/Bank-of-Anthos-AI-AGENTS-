@@ -39,7 +39,7 @@ else:
 # --- Pydantic Data Models ---
 class BudgetBase(BaseModel):
     category: str
-    budget_limit: int
+    budget_limit: float  # Input in dollars
 
 class BudgetCreate(BudgetBase):
     period_start: date
@@ -50,10 +50,11 @@ class Budget(BudgetBase):
     account_id: str
     period_start: date
     period_end: date
-    spent: Optional[int] = 0  # Spent amount in cents
+    spent: Optional[float] = 0  # Spent amount in dollars
 
 class BudgetUpdate(BaseModel):
-    budget_limit: Optional[int] = None
+    category: Optional[str] = None
+    budget_limit: Optional[float] = None
     period_start: Optional[date] = None
     period_end: Optional[date] = None
 
@@ -179,10 +180,18 @@ async def get_transaction_count(
 @app.post("/budgets/{account_id}", response_model=Budget)
 async def create_budget(account_id: str, budget: BudgetCreate, claims: Dict[str, Any] = Depends(get_current_user_claims)):
     try:
-        new_budget_row = db.create_budget(account_id, budget)
+        # Convert dollars to cents for DB storage
+        budget_limit_cents = int(round(budget.budget_limit * 100))
+        budget_for_db = budget.model_copy(update={'budget_limit': budget_limit_cents})
+        
+        new_budget_row = db.create_budget(account_id, budget_for_db)
         if not new_budget_row:
             raise HTTPException(status_code=500, detail="Failed to create budget.")
-        return dict(new_budget_row._mapping)
+        
+        # Convert back to dollars for response
+        result = dict(new_budget_row._mapping)
+        result['budget_limit'] = round(result['budget_limit'] / 100.0, 2)
+        return result
     except SQLAlchemyError as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
@@ -201,10 +210,12 @@ async def get_budgets(account_id: str, claims: Dict[str, Any] = Depends(get_curr
             
             # Get spending for this category in the budget period
             spending_by_category = db.get_budget_usage(account_id, period_start, period_end)
-            spent = spending_by_category.get(budget['category'], 0)
+            spent_cents = spending_by_category.get(budget['category'], 0)
             
             budget_with_spent = dict(budget)
-            budget_with_spent['spent'] = spent
+            # Convert to dollars
+            budget_with_spent['budget_limit'] = round(budget['budget_limit'] / 100.0, 2)
+            budget_with_spent['spent'] = round(spent_cents / 100.0, 2)
             budgets_with_spent.append(budget_with_spent)
         
         return budgets_with_spent
@@ -216,6 +227,11 @@ async def update_budget(account_id: str, category: str, budget_update: BudgetUpd
     update_data = budget_update.model_dump(exclude_unset=True)
     if not update_data:
         raise HTTPException(status_code=400, detail="No update data provided.")
+    
+    # Convert dollars to cents for DB
+    if 'budget_limit' in update_data:
+        update_data['budget_limit'] = int(round(update_data['budget_limit'] * 100))
+
     try:
         updated_count = db.update_budget(account_id, category, update_data)
         if updated_count == 0:
@@ -231,10 +247,12 @@ async def update_budget(account_id: str, category: str, budget_update: BudgetUpd
             period_end = updated_budget.get('period_end', (today.replace(day=1) + timedelta(days=31)).replace(day=1) - timedelta(days=1))
             
             spending_by_category = db.get_budget_usage(account_id, period_start, period_end)
-            spent = spending_by_category.get(category, 0)
+            spent_cents = spending_by_category.get(category, 0)
             
             updated_budget = dict(updated_budget)
-            updated_budget['spent'] = spent
+            # Convert to dollars
+            updated_budget['budget_limit'] = round(updated_budget['budget_limit'] / 100.0, 2)
+            updated_budget['spent'] = round(spent_cents / 100.0, 2)
             
         return updated_budget
     except SQLAlchemyError as e:
@@ -300,8 +318,13 @@ async def get_overview(account_id: str, claims: Dict[str, Any] = Depends(get_cur
             # this logic might overwrite. Ideally, we sum limits or pick the most recent.
             # But the primary fix requested is filtering expired ones.
             
-            spent = spending_by_category.get(category, 0)
-            limit = b['budget_limit']
+            spent_cents = spending_by_category.get(category, 0)
+            limit_cents = b['budget_limit']
+
+            # Convert to Dollars
+            spent = round(spent_cents / 100.0, 2)
+            limit = round(limit_cents / 100.0, 2)
+
             remaining = limit - spent
             status = "on_track"
             if spent > limit:
@@ -310,7 +333,7 @@ async def get_overview(account_id: str, claims: Dict[str, Any] = Depends(get_cur
                 status = "at_risk"
 
             overview[category] = {
-                "limit": limit, "spent": round(spent, 2),
+                "limit": limit, "spent": spent,
                 "remaining": round(remaining, 2), "status": status,
             }
         return {"account_id": account_id, "overview": overview}
@@ -327,7 +350,13 @@ async def get_saving_tips(account_id: str, claims: Dict[str, Any] = Depends(get_
         overview = overview_data.get("overview", {})
         
         # Get transaction logs for detailed spending analysis
-        transaction_logs = db.get_transaction_logs(account_id, limit=20)
+        # Only use executed transactions (normal or confirmed, excluding blocked fraud attempts)
+        all_logs = db.get_transaction_logs(account_id, limit=50)
+        transaction_logs = [
+            txn for txn in all_logs 
+            if txn.get("transaction_id") is not None and 
+            txn.get("anomaly_status") in [None, 'normal', 'confirmed']
+        ][:20]
         
         # Prepare context for AI
         if GEMINI_API_KEY and (overview or transaction_logs):

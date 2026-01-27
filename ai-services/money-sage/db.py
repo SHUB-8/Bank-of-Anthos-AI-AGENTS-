@@ -71,7 +71,7 @@ class MoneyDb:
         Calculates total spending per category directly from transaction_logs.
         This ensures real-time updates when transactions are made.
         """
-        self.logger.info(f"Database: Calculating budget usage for account {account_id}")
+        self.logger.debug(f"Database: Calculating budget usage for account {account_id}")
         
         # Ensure dates are datetime objects for comparison (start of day / end of day)
         # Assuming start_date and end_date might be date objects, convert to datetime or rely on strict type
