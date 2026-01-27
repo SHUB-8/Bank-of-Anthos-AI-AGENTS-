@@ -4,6 +4,7 @@ import { AuthProvider } from './contexts/AuthContext.tsx';
 import ProtectedRoute from './components/ProtectedRoute.tsx';
 import Layout from './components/Layout.jsx';
 import Login from './pages/Login.tsx';
+import Signup from './pages/Signup.tsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Chat from './pages/Chat.jsx';
 import Transactions from './pages/Transactions.jsx';
@@ -18,6 +19,7 @@ function App() {
         <Routes>
           {/* Public routes */}
           <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
           
           {/* Protected routes */}
           <Route path="/*" element={

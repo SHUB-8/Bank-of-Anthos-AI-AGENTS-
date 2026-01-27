@@ -4,13 +4,14 @@ import { Download, Building, DollarSign, FileText, AlertCircle, CheckCircle, Use
 
 const DepositMoney = ({ onSuccess, compact = false }) => {
   const [formData, setFormData] = useState({
-    externalAccountNumber: '',
-    externalRoutingNumber: '',
+    externalAccountNumber: '1234567890',
+    externalRoutingNumber: '123456789',
+    externalLabel: '',
     amount: '',
     description: ''
   });
   const [contacts, setContacts] = useState([]);
-  const [selectedContact, setSelectedContact] = useState(''); // '' = none, 'new' = new, or json string
+  const [selectedContact, setSelectedContact] = useState('new'); // Default to 'new' with prefilled values
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -22,7 +23,8 @@ const DepositMoney = ({ onSuccess, compact = false }) => {
         // Filter only external contacts as per legacy behavior
         const external = data.filter(c => c.isExternal);
         setContacts(external);
-        // Default to first contact if available, or 'new'
+        
+        // If the user already has external accounts, use the first one
         if (external.length > 0) {
            const first = external[0];
            const val = JSON.stringify({acc: first.accountNumber, rout: first.routingNumber});
@@ -33,6 +35,7 @@ const DepositMoney = ({ onSuccess, compact = false }) => {
              externalRoutingNumber: first.routingNumber
            }));
         } else {
+           // Otherwise keep 'new' with our prefilled values
            setSelectedContact('new');
         }
       } catch (err) {
@@ -47,7 +50,13 @@ const DepositMoney = ({ onSuccess, compact = false }) => {
     const val = e.target.value;
     setSelectedContact(val);
     if (val === 'new') {
-      setFormData(prev => ({ ...prev, externalAccountNumber: '', externalRoutingNumber: '' }));
+      // For 'new', use the prefilled defaults
+      setFormData(prev => ({ 
+        ...prev, 
+        externalAccountNumber: '1234567890', 
+        externalRoutingNumber: '123456789',
+        externalLabel: '' 
+      }));
     } else {
       try {
         const parsed = JSON.parse(val);
@@ -62,9 +71,39 @@ const DepositMoney = ({ onSuccess, compact = false }) => {
     e.preventDefault();
     setError('');
     setSuccess('');
+
+    // Digit constraints validation
+    if (!/^\d{10}$/.test(formData.externalAccountNumber.trim())) {
+      setError('Account number must be exactly 10 digits.');
+      return;
+    }
+    if (!/^\d{9}$/.test(formData.externalRoutingNumber.trim())) {
+      setError('Routing number must be exactly 9 digits.');
+      return;
+    }
+
+    if (formData.externalRoutingNumber.trim() === '883745000') {
+      setError('Deposits must come from an EXTERNAL routing number. 883745000 is the internal Bank of Anthos routing number.');
+      return;
+    }
+
     setLoading(true);
 
     try {
+      // If it's a new account and a label is provided, save it as a contact first
+      if (selectedContact === 'new' && formData.externalLabel.trim()) {
+        try {
+          await contactSageAPI.createContact({
+            name: formData.externalLabel,
+            accountNumber: formData.externalAccountNumber,
+            routingNumber: formData.externalRoutingNumber,
+            isExternal: true
+          });
+        } catch (contactErr) {
+          console.warn('Could not save contact, but proceeding with deposit:', contactErr);
+        }
+      }
+
       const result = await transactionAPI.depositMoney({
         externalAccountNumber: formData.externalAccountNumber,
         externalRoutingNumber: formData.externalRoutingNumber,
@@ -74,13 +113,12 @@ const DepositMoney = ({ onSuccess, compact = false }) => {
 
       setSuccess(`Deposit of $${formData.amount} initiated successfully!`);
       
-      // Reset form
-      setFormData({
-        externalAccountNumber: '',
-        externalRoutingNumber: '',
+      // Reset amount and description
+      setFormData(prev => ({
+        ...prev,
         amount: '',
         description: ''
-      });
+      }));
 
       if (onSuccess) {
         onSuccess(result);
@@ -144,34 +182,51 @@ const DepositMoney = ({ onSuccess, compact = false }) => {
 
           {/* Manual Inputs - Only if 'new' is selected */}
           {selectedContact === 'new' && (
-          <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <Building className="h-4 w-4 text-gray-400" />
+                </div>
+                <input
+                  type="text"
+                  maxLength={9}
+                  value={formData.externalRoutingNumber}
+                  onChange={(e) => setFormData({...formData, externalRoutingNumber: e.target.value})}
+                  className="pl-9 bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-green-500 focus:border-green-500 block w-full p-2.5"
+                  placeholder="Routing Number (9 digits)"
+                  required={selectedContact === 'new'}
+                />
+              </div>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <Building className="h-4 w-4 text-gray-400" />
+                </div>
+                <input
+                  type="text"
+                  maxLength={10}
+                  value={formData.externalAccountNumber}
+                  onChange={(e) => setFormData({...formData, externalAccountNumber: e.target.value})}
+                  className="pl-9 bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-green-500 focus:border-green-500 block w-full p-2.5"
+                  placeholder="Account Number (10 digits)"
+                  required={selectedContact === 'new'}
+                />
+              </div>
+            </div>
+            
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <Building className="h-4 w-4 text-gray-400" />
+                <UserPlus className="h-4 w-4 text-gray-400" />
               </div>
               <input
                 type="text"
-                value={formData.externalRoutingNumber}
-                onChange={(e) => setFormData({...formData, externalRoutingNumber: e.target.value})}
+                value={formData.externalLabel}
+                onChange={(e) => setFormData({...formData, externalLabel: e.target.value})}
                 className="pl-9 bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-green-500 focus:border-green-500 block w-full p-2.5"
-                placeholder="Routing Number"
-                required={selectedContact === 'new'}
+                placeholder="Account Label (e.g. My External Bank) - optional"
               />
+              <p className="mt-1 text-xs text-gray-600 italic">Providing a label will save this account for future deposits.</p>
             </div>
-            <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <Building className="h-4 w-4 text-gray-400" />
-              </div>
-              <input
-                type="text"
-                value={formData.externalAccountNumber}
-                onChange={(e) => setFormData({...formData, externalAccountNumber: e.target.value})}
-                className="pl-9 bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-green-500 focus:border-green-500 block w-full p-2.5"
-                placeholder="Account Number"
-                required={selectedContact === 'new'}
-              />
-            </div>
-            <p className="col-span-2 mt-1 text-xs text-gray-500">Provide details of your external bank account.</p>
           </div>
           )}
         </div>

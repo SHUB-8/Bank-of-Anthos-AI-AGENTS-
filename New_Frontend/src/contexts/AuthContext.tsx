@@ -6,13 +6,14 @@
  */
 
 import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import authService, { JWTClaims, LoginCredentials } from '../services/authService';
+import authService, { JWTClaims, LoginCredentials, SignupData } from '../services/authService';
 
 interface AuthContextType {
   user: JWTClaims | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (credentials: LoginCredentials) => Promise<void>;
+  signup: (data: SignupData) => Promise<void>;
   logout: () => void;
   refreshAuth: () => void;
 }
@@ -76,6 +77,18 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
+  const handleSignup = async (data: SignupData): Promise<void> => {
+    setIsLoading(true);
+    try {
+      await authService.signup(data);
+    } catch (error) {
+      console.error('Signup failed:', error);
+      throw error;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleLogout = (): void => {
     authService.logout();
     setUser(null);
@@ -100,6 +113,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     isAuthenticated: !!user && authService.isAuthenticated(),
     isLoading,
     login: handleLogin,
+    signup: handleSignup,
     logout: handleLogout,
     refreshAuth,
   };

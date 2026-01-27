@@ -165,52 +165,57 @@ export const orchestratorAPI = {
   },
 
   /**
-   * Get notifications for the current user
+   * Get notifications from orchestrator
    */
-  async getNotifications() {
-    const url = `${getOrchestratorUrl()}/notifications`;
-    
+  async getNotifications(includeRead = false) {
+    const url = `${getOrchestratorUrl()}/notifications?include_read=${includeRead}`;
     try {
       const response = await fetch(url, {
-        method: 'GET',
         headers: getAuthHeaders()
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch notifications');
-      }
-
+      if (!response.ok) throw new Error('Failed to fetch notifications');
       const data = await response.json();
       return data.notifications || [];
     } catch (error) {
-      console.error('Notifications fetch error:', error);
+      console.error('getNotifications error:', error);
       return [];
     }
   },
 
   /**
-   * Verify OTP for suspicious transaction confirmation
+   * Mark notifications as read
    */
-  async verifyOtp(confirmationId, otp) {
-    const url = `${getOrchestratorUrl()}/verify-otp`;
-    
+  async markNotificationsRead(notificationIds) {
+    const url = `${getOrchestratorUrl()}/notifications/read`;
     try {
       const response = await fetch(url, {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({
-          confirmation_id: confirmationId,
-          otp: otp
-        })
+        body: JSON.stringify(notificationIds)
       });
-
-      if (!response.ok) {
-        throw new Error('OTP verification failed');
-      }
-
-      return await response.json();
+      return response.ok;
     } catch (error) {
-      console.error('OTP verification error:', error);
+      console.error('markNotificationsRead error:', error);
+      return false;
+    }
+  },
+
+  /**
+   * Verify OTP for a pending transaction
+   */
+  async verifyOtp(confirmationId, otp) {
+    const url = `${getOrchestratorUrl()}/verify-otp`;
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ confirmation_id: confirmationId, otp: otp })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'OTP verification failed');
+      return data;
+    } catch (error) {
+      console.error('verifyOtp error:', error);
       throw error;
     }
   },
@@ -242,6 +247,46 @@ export const orchestratorAPI = {
   },
 
   /**
+   * Get list of previous chat sessions
+   */
+  async getUserSessions() {
+    const url = `${getOrchestratorUrl()}/sessions`;
+    try {
+      const response = await fetch(url, {
+        headers: getAuthHeaders()
+      });
+      if (!response.ok) throw new Error('Failed to fetch sessions');
+      const data = await response.json();
+      return data.sessions || [];
+    } catch (error) {
+      console.error('getUserSessions error:', error);
+      return [];
+    }
+  },
+
+  /**
+   * Start a new chat session
+   */
+  async startNewSession() {
+    // Generate new ID locally or fetch from server
+    // We'll use the server endpoint to respect the architecture
+    const url = `${getOrchestratorUrl()}/session-id`;
+    try {
+      const response = await fetch(url, { headers: getAuthHeaders() });
+      if (response.ok) {
+        const data = await response.json();
+        localStorage.setItem('boa_session_id', data.session_id);
+        return data.session_id;
+      }
+    } catch (e) { console.error(e); }
+    
+    // Fallback
+    const newId = crypto.randomUUID();
+    localStorage.setItem('boa_session_id', newId);
+    return newId;
+  },
+
+  /**
    * Check orchestrator health
    */
   async healthCheck() {
@@ -252,6 +297,39 @@ export const orchestratorAPI = {
       return response.ok;
     } catch (error) {
       console.error('Health check error:', error);
+      return false;
+    }
+  },
+
+  /**
+   * Get messages for a specific session
+   */
+  async getSessionMessages(sessionId) {
+    const url = `${getOrchestratorUrl()}/sessions/${sessionId}/messages`;
+    try {
+      const response = await fetch(url, { headers: getAuthHeaders() });
+      if (!response.ok) throw new Error('Failed to fetch messages');
+      const data = await response.json();
+      return data.messages || [];
+    } catch (error) {
+      console.error('getSessionMessages error:', error);
+      return [];
+    }
+  },
+
+  /**
+   * Delete a session
+   */
+  async deleteSession(sessionId) {
+    const url = `${getOrchestratorUrl()}/sessions/${sessionId}`;
+    try {
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      });
+      return response.ok;
+    } catch (error) {
+      console.error('deleteSession error:', error);
       return false;
     }
   }
@@ -319,11 +397,6 @@ export const contactSageAPI = {
     if (!isExternal) {
       // Internal contacts use Bank of Anthos routing
       routingNum = routingNum || '883745000';
-    } else {
-      // External contacts CANNOT use local routing
-      if (!routingNum || routingNum === '883745000') {
-        throw new Error('External contacts require a different bank routing number (not 883745000)');
-      }
     }
     
     // Account number must be exactly 10 digits

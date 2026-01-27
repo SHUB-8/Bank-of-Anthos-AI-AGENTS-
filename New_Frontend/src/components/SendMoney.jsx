@@ -53,6 +53,19 @@ const SendMoney = ({ onSuccess, onClose, compact = false }) => {
     e.preventDefault();
     setError('');
     setSuccess('');
+
+    // Validate manual inputs if recipientType is 'manual'
+    if (formData.recipientType === 'manual') {
+      if (!/^\d{10}$/.test(formData.recipientAccountNumber)) {
+        setError('Account number must be exactly 10 digits.');
+        return;
+      }
+      if (!/^\d{9}$/.test(formData.recipientRoutingNumber)) {
+        setError('Routing number must be exactly 9 digits.');
+        return;
+      }
+    }
+
     setLoading(true);
 
     try {

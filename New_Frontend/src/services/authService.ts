@@ -1,8 +1,6 @@
 /**
  * Authentication Service
- * 
  * Handles JWT-based authentication compatible with existing Bank of Anthos userservice.
- * Mirrors the authentication patterns from src/frontend/frontend.py
  */
 
 import { jwtDecode } from 'jwt-decode';
@@ -24,6 +22,20 @@ export interface AuthResponse {
 export interface LoginCredentials {
   username: string;
   password: string;
+}
+
+export interface SignupData {
+  username: string;
+  password: string;
+  'password-repeat': string;
+  firstname: string;
+  lastname: string;
+  birthday: string;
+  timezone: string;
+  address: string;
+  state: string;
+  zip: string;
+  ssn: string;
 }
 
 class AuthService {
@@ -116,6 +128,61 @@ class AuthService {
         throw error;
       }
       throw new Error('Login failed');
+    }
+  }
+
+  /**
+   * Signup user with detailed information
+   * Uses the same /users endpoint as existing userservice
+   */
+  async signup(data: SignupData): Promise<void> {
+    // Use mock service in development if configured
+    if (import.meta.env.VITE_USE_MOCK_API === 'true') {
+      try {
+        await mockAuthService.mockSignup(data);
+        return;
+      } catch (error) {
+        console.error('Mock signup error:', error);
+        throw new Error('Signup failed');
+      }
+    }
+
+    const usersUri = this.getUsersUri();
+    
+    try {
+      console.log('Attempting signup to:', usersUri);
+
+      // userservice expects form data (request.form)
+      const formData = new URLSearchParams();
+      Object.entries(data).forEach(([key, value]) => {
+        formData.append(key, value);
+      });
+
+      const response = await fetch(usersUri, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: formData.toString(),
+        credentials: 'include',
+      });
+
+      console.log('Signup response status:', response.status);
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Signup failed');
+        console.error('Signup failed:', errorText);
+        throw new Error(errorText || 'Signup failed');
+      }
+
+      // 201 Created indicates success
+      return;
+    } catch (error) {
+      console.error('Signup error details:', error);
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error('Signup failed');
     }
   }
 
@@ -244,6 +311,27 @@ class AuthService {
     // In production (Kubernetes), use service name or configured URL
     const userserviceAddr = import.meta.env.VITE_USERSERVICE_API_ADDR || 'http://userservice:8080';
     return `${userserviceAddr}/login`;
+  }
+
+  /**
+   * Get USERS_URI for user registration
+   */
+  private getUsersUri(): string {
+    // Check if we're in development mode and use mock API
+    if (import.meta.env.VITE_USE_MOCK_API === 'true') {
+      return '/api/users';
+    }
+
+    const isDevelopment = import.meta.env.DEV;
+    
+    if (isDevelopment) {
+      // Always use proxy path in development to avoid CORS
+      return `/userservice/users`;
+    }
+    
+    // In production (Kubernetes), use service name or configured URL
+    const userserviceAddr = import.meta.env.VITE_USERSERVICE_API_ADDR || 'http://userservice:8080';
+    return `${userserviceAddr}/users`;
   }
 
   /**

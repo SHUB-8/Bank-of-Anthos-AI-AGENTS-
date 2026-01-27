@@ -117,7 +117,8 @@ const Budgets = () => {
     }
   };
 
-  const getBudgetStatus = (spent, limit) => {
+  const getBudgetStatus = (spent, limit, isExpired) => {
+    if (isExpired) return { status: 'Expired', color: 'text-gray-500', bg: 'bg-gray-100' };
     const percentage = (spent / limit) * 100;
     if (percentage < 60) return { status: 'On Track', color: 'text-green-600', bg: 'bg-green-50' };
     if (percentage < 80) return { status: 'Watch Out', color: 'text-yellow-600', bg: 'bg-yellow-50' };
@@ -141,7 +142,7 @@ const Budgets = () => {
   const renderBudgetCard = (budget, isExpired) => {
     const percentage = (budget.spent / budget.limit) * 100;
     const remaining = budget.limit - budget.spent;
-    const status = getBudgetStatus(budget.spent, budget.limit);
+    const status = getBudgetStatus(budget.spent, budget.limit, isExpired);
 
     return (
       <div key={budget.id} className={`bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow ${isExpired ? 'opacity-70 bg-gray-50' : ''}`}>

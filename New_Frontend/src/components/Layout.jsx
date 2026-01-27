@@ -43,7 +43,7 @@ const Layout = ({ children }) => {
         {/* Logo */}
         <div className="flex h-16 items-center px-6 border-b border-gray-200">
           <Building2 className="h-8 w-8 text-blue-600" />
-          <span className="ml-2 text-xl font-bold text-gray-900">Bank of Anthos AI</span>
+          <span className="ml-2 text-xl font-bold text-gray-900">Bank of Anthos</span>
         </div>
 
         {/* Navigation */}

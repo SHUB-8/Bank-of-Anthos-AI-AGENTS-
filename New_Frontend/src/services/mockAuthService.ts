@@ -49,6 +49,22 @@ export class MockAuthService {
 
     return { token };
   }
+
+  /**
+   * Mock signup that simulates user registration
+   */
+  async mockSignup(data: any): Promise<void> {
+    // Simulate network delay
+    await new Promise(resolve => setTimeout(resolve, 800));
+
+    console.log('Mock signup with data:', data);
+
+    if (data.username === 'exists') {
+      throw new Error('User already exists');
+    }
+
+    return;
+  }
 }
 
 export const mockAuthService = new MockAuthService();

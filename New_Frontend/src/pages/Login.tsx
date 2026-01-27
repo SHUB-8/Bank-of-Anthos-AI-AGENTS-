@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Navigate, useLocation } from 'react-router-dom';
+import { Navigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
 const Login: React.FC = () => {
@@ -125,9 +125,15 @@ const Login: React.FC = () => {
             </button>
           </div>
 
-          <div className="text-center">
+          <div className="text-center space-y-2">
             <p className="text-sm text-gray-600">
               Demo credentials are pre-filled for testing
+            </p>
+            <p className="text-sm">
+              <span className="text-gray-600">Don't have an account? </span>
+              <Link to="/signup" className="font-medium text-blue-600 hover:text-blue-500">
+                Sign up
+              </Link>
             </p>
           </div>
         </form>

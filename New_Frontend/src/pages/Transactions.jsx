@@ -639,7 +639,10 @@ const Transactions = () => {
              </div>
              
              {securitySections.activityLog.length === 0 ? (
-                 <p className="text-sm text-gray-500 italic p-4">No historical security activity found.</p>
+                  <div className="bg-white p-8 rounded-lg border border-dashed border-gray-300 text-center text-gray-500">
+                     <CheckCircle className="h-10 w-10 mx-auto mb-2 text-green-500 opacity-50" />
+                     <p>No historical security activity found.</p>
+                  </div>
              ) : (
                  <div className="bg-white rounded-lg shadow-sm border divide-y divide-gray-200 opacity-90">
                      {securitySections.activityLog.map(anomaly => renderAnomalyCard(anomaly, false))}

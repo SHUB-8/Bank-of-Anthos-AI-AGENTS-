@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Bell, ShieldAlert, AlertTriangle, CheckCircle, Info } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { databaseAPI } from '../api/database';
-import { moneySageAPI } from '../api/ai_agents';
+import { moneySageAPI, orchestratorAPI } from '../api/ai_agents';
 
 const NotificationDropdown = () => {
   const [isOpen, setIsOpen] = useState(false);
@@ -50,7 +50,26 @@ const NotificationDropdown = () => {
         console.warn('Failed to fetch security alerts:', err);
       }
 
-      // 2. Fetch Budget Alerts
+      // 2. Fetch Orchestrator Notifications (OTP, Fraud Alerts etc)
+      try {
+        const orchNotifications = await orchestratorAPI.getNotifications();
+        (orchNotifications || []).forEach(notif => {
+            newNotifications.push({
+                id: `orch-${notif.id}`,
+                type: notif.type === 'otp' ? 'security' : (notif.type === 'alert' ? 'error' : 'info'),
+                title: notif.type === 'otp' ? 'Verification Code' : 'System Alert',
+                message: notif.message,
+                timestamp: notif.created_at,
+                read: !!notif.read_at,
+                link: notif.type === 'otp' ? '/chat' : null, // Redirect to chat for OTP entry
+                metadata: notif.metadata
+            });
+        });
+      } catch (err) {
+        console.warn('Failed to fetch orchestrator notifications:', err);
+      }
+
+      // 3. Fetch Budget Alerts
       try {
         const budgets = await moneySageAPI.getBudgets();
         (budgets || []).forEach(budget => {
@@ -91,13 +110,26 @@ const NotificationDropdown = () => {
       });
 
       setNotifications(newNotifications);
-      setUnreadCount(newNotifications.length);
+      setUnreadCount(newNotifications.filter(n => !n.read).length);
 
     } catch (error) {
       console.error('Error fetching notifications:', error);
     } finally {
       setLoading(false);
     }
+  };
+
+  const markAsRead = async (id) => {
+    // Determine which API to call based on ID prefix
+    if (id.startsWith('orch-')) {
+        const orchId = id.replace('orch-', '');
+        await orchestratorAPI.markNotificationsRead([orchId]);
+    }
+    
+    setNotifications(prev => 
+      prev.map(n => n.id === id ? { ...n, read: true } : n)
+    );
+    setUnreadCount(prev => Math.max(0, prev - (notifications.find(n => n.id === id)?.read ? 0 : 1)));
   };
 
   // Poll for notifications every 30 seconds
@@ -122,6 +154,9 @@ const NotificationDropdown = () => {
              navigate(notification.link);
          }
      }
+
+     // Mark as read on click
+     markAsRead(notification.id);
   };
 
   const getIcon = (type) => {
