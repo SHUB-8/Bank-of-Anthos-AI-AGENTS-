@@ -217,16 +217,16 @@ class ApiClient {
    */
   getServiceUrl(serviceName: string): string {
     const serviceMap: Record<string, string> = {
-      userservice: import.meta.env.VITE_USERSERVICE_API_ADDR || 'userservice:8080',
-      balances: import.meta.env.VITE_BALANCES_API_ADDR || 'balancereader:8080',
-      history: import.meta.env.VITE_HISTORY_API_ADDR || 'transactionhistory:8080',
-      contacts: import.meta.env.VITE_CONTACTS_API_ADDR || 'contacts:8080',
-      transactions: import.meta.env.VITE_TRANSACTIONS_API_ADDR || 'ledgerwriter:8080',
-      orchestrator: import.meta.env.VITE_ORCHESTRATOR_URL || 'http://orchestrator:8082',
-      'contact-sage': import.meta.env.VITE_CONTACT_SAGE_URL || 'http://contact-sage:8083',
-      'money-sage': import.meta.env.VITE_MONEY_SAGE_URL || 'http://money-sage:8084',
-      'anomaly-sage': import.meta.env.VITE_ANOMALY_SAGE_URL || 'http://anomaly-sage:8085',
-      'transaction-sage': import.meta.env.VITE_TRANSACTION_SAGE_URL || 'http://transaction-sage:8086',
+      userservice: import.meta.env.VITE_USERSERVICE_API_ADDR || '/api/userservice',
+      balances: import.meta.env.VITE_BALANCES_API_ADDR || '/api/balances',
+      history: import.meta.env.VITE_HISTORY_API_ADDR || '/api/history',
+      contacts: import.meta.env.VITE_CONTACTS_API_ADDR || '/api/contacts',
+      transactions: import.meta.env.VITE_TRANSACTIONS_API_ADDR || '/api/transactions',
+      orchestrator: import.meta.env.VITE_ORCHESTRATOR_URL || '/api/orchestrator',
+      'contact-sage': import.meta.env.VITE_CONTACT_SAGE_URL || '/api/contact-sage',
+      'money-sage': import.meta.env.VITE_MONEY_SAGE_URL || '/api/money-sage',
+      'anomaly-sage': import.meta.env.VITE_ANOMALY_SAGE_URL || '/api/anomaly-sage',
+      'transaction-sage': import.meta.env.VITE_TRANSACTION_SAGE_URL || '/api/transaction-sage',
     };
 
     const serviceAddr = serviceMap[serviceName];
@@ -234,8 +234,12 @@ class ApiClient {
       throw new Error(`Unknown service: ${serviceName}`);
     }
 
-    // Add http:// prefix if not present (for non-AI services)
-    if (!serviceAddr.startsWith('http://') && !serviceAddr.startsWith('https://')) {
+    // Add http:// prefix if it looks like a hostname:port and not a relative path
+    if (
+        !serviceAddr.startsWith('/') && 
+        !serviceAddr.startsWith('http://') && 
+        !serviceAddr.startsWith('https://')
+    ) {
       return `http://${serviceAddr}`;
     }
 

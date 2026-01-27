@@ -330,8 +330,9 @@ class AuthService {
     }
     
     // In production (Kubernetes), use service name or configured URL
-    const userserviceAddr = import.meta.env.VITE_USERSERVICE_API_ADDR || 'http://userservice:8080';
-    return `${userserviceAddr}/users`;
+    // Default to relative proxy path
+    const userserviceAddr = import.meta.env.VITE_USERSERVICE_API_ADDR || '/api/userservice';
+    return `${userserviceAddr}/login`;
   }
 
   /**

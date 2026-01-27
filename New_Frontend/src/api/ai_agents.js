@@ -8,45 +8,25 @@
 
 import authService from '../services/authService';
 
-// Get base URLs - in development, use Vite proxy paths to avoid CORS
+// Get base URLs - default to relative proxy paths for K8s Nginx deployment
 const getOrchestratorUrl = () => {
-  if (import.meta.env.DEV) {
-    // Use Vite proxy path in development
-    return '/api/orchestrator';
-  }
-  return import.meta.env.VITE_ORCHESTRATOR_URL || 'http://orchestrator:8082';
+  return import.meta.env.VITE_ORCHESTRATOR_URL || '/api/orchestrator';
 };
 
 const getMoneySageUrl = () => {
-  if (import.meta.env.DEV) {
-    // Use Vite proxy path in development
-    return '/api/money-sage';
-  }
-  return import.meta.env.VITE_MONEY_SAGE_URL || 'http://money-sage:8084';
+  return import.meta.env.VITE_MONEY_SAGE_URL || '/api/money-sage';
 };
 
 const getContactSageUrl = () => {
-  if (import.meta.env.DEV) {
-    // Use Vite proxy path in development
-    return '/api/contact-sage';
-  }
-  return import.meta.env.VITE_CONTACT_SAGE_URL || 'http://contact-sage:8083';
+  return import.meta.env.VITE_CONTACT_SAGE_URL || '/api/contact-sage';
 };
 
 const getAnomalySageUrl = () => {
-  if (import.meta.env.DEV) {
-    // Use Vite proxy path in development
-    return '/api/anomaly-sage';
-  }
-  return import.meta.env.VITE_ANOMALY_SAGE_URL || 'http://anomaly-sage:8085';
+  return import.meta.env.VITE_ANOMALY_SAGE_URL || '/api/anomaly-sage';
 };
 
 const getTransactionSageUrl = () => {
-  if (import.meta.env.DEV) {
-    // Use Vite proxy path in development
-    return '/api/transaction-sage';
-  }
-  return import.meta.env.VITE_TRANSACTION_SAGE_URL || 'http://transaction-sage:8086';
+  return import.meta.env.VITE_TRANSACTION_SAGE_URL || '/api/transaction-sage';
 };
 
 // Helper to get auth headers

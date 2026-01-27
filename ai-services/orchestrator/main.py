@@ -295,7 +295,7 @@ async def process_chat_request(
         
         # 5. Handle tool calls loop (support chained calls)
         final_text = ""
-        max_turns = 5
+        max_turns = 20
         current_turn = 0
         
         while current_turn < max_turns:
@@ -436,7 +436,7 @@ async def stream_chat_request(
             # We'll handle tool calls by buffering if needed, or just handling the first response.
             response_stream = await chat.send_message_async(user_query, stream=True)
             
-            max_turns = 5
+            max_turns = 20
             current_turn = 0
             
             while current_turn < max_turns:

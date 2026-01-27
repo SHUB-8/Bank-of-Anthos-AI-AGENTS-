@@ -37,5 +37,8 @@ requires:
 - configs:
   - ai-services
   path: ai-services/skaffold.yaml
+- configs:
+  - new-frontend
+  path: New_Frontend/skaffold.yaml
 deploy:
   tolerateFailuresUntilDeadline: true
