@@ -132,7 +132,7 @@ class OrchestratorDb:
             self.logger.error(f"Unexpected error retrieving session history for {session_id}: {str(e)}")
             return []
 
-    def save_session_turn(self, session_id: str, user_query: str, model_response: str) -> bool:
+    def save_session_turn(self, session_id: str, user_query: str, model_response: str, account_id: str = None) -> bool:
         """
         Saves a single conversation turn to the database
         
@@ -156,7 +156,7 @@ class OrchestratorDb:
                 ))
                 
                 # Update session metadata
-                self._update_session_metadata(conn, session_id)
+                self._update_session_metadata(conn, session_id, account_id)
             
             self.logger.info(f"Saved conversation turn for session {session_id}")
             return True
@@ -225,6 +225,107 @@ class OrchestratorDb:
         except Exception as e:
             self.logger.error(f"Unexpected error during cleanup: {str(e)}")
             return 0
+
+    def get_user_sessions(self, account_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Get list of recent chat sessions for a user
+        
+        Args:
+            account_id: The user's account ID
+            limit: Max number of sessions to return
+            
+        Returns:
+            List of session summaries
+        """
+        try:
+            query = self.session_metadata_table.select().where(
+                self.session_metadata_table.c.account_id == account_id
+            ).order_by(
+                self.session_metadata_table.c.last_activity.desc()
+            ).limit(limit)
+            
+            with self.engine.connect() as conn:
+                result = conn.execute(query)
+                sessions = []
+                
+                for row in result.mappings():
+                    sessions.append({
+                        "session_id": row.session_id,
+                        "created_at": row.created_at.isoformat() if row.created_at else None,
+                        "last_activity": row.last_activity.isoformat() if row.last_activity else None,
+                        "message_count": int(row.message_count or 0),
+                        "snippet": "Chat Session" # Could be enhanced to fetch first message
+                    })
+                
+                return sessions
+                
+        except SQLAlchemyError as e:
+            self.logger.error(f"Database error retrieving user sessions for {account_id}: {str(e)}")
+            return []
+        except Exception as e:
+            self.logger.error(f"Unexpected error retrieving user sessions for {account_id}: {str(e)}")
+            return []
+
+    def get_session_messages(self, session_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all messages for a specific session
+        """
+        try:
+            query = self.agent_memory_table.select().where(
+                self.agent_memory_table.c.session_id == session_id
+            ).order_by(
+                self.agent_memory_table.c.created_at.asc()
+            )
+            
+            with self.engine.connect() as conn:
+                result = conn.execute(query)
+                messages = []
+                
+                for row in result.mappings():
+                    msg_type = row.key # 'user' or 'model'
+                    content = row.value # JSON object
+                    
+                    messages.append({
+                        "id": str(row.id),
+                        "sender": "user" if msg_type == "user" else "ai",
+                        "text": content.get("text", "") if isinstance(content, dict) else str(content),
+                        "timestamp": row.created_at.isoformat() if row.created_at else None
+                    })
+                
+                return messages
+        except Exception as e:
+            self.logger.error(f"Error retrieving messages for session {session_id}: {e}")
+            return []
+
+    def delete_session(self, session_id: str, account_id: str) -> bool:
+        """
+        Delete a session and all its messages.
+        Verifies account_id ownership before deleting.
+        """
+        try:
+            with self.engine.begin() as conn:
+                # 1. Verify ownership
+                check_query = self.session_metadata_table.select().where(
+                    (self.session_metadata_table.c.session_id == session_id) &
+                    (self.session_metadata_table.c.account_id == account_id)
+                )
+                if not conn.execute(check_query).first():
+                    return False
+
+                # 2. Delete memory
+                conn.execute(self.agent_memory_table.delete().where(
+                    self.agent_memory_table.c.session_id == session_id
+                ))
+                
+                # 3. Delete metadata
+                conn.execute(self.session_metadata_table.delete().where(
+                    self.session_metadata_table.c.session_id == session_id
+                ))
+                
+                return True
+        except Exception as e:
+            self.logger.error(f"Error deleting session {session_id}: {e}")
+            return False
 
     # === Currency Exchange Rate Management ===
     

@@ -270,3 +270,35 @@ class SageServices:
                 }
         
         return results
+    
+    async def get_transaction_count(self, account_id: str, auth_header: str,
+                                   transaction_type: Optional[str] = None,
+                                   anomaly_status: Optional[str] = None) -> Dict[str, Any]:
+        """Get total transaction count from money-sage"""
+        params = []
+        if transaction_type:
+            params.append(f"transaction_type={transaction_type}")
+        if anomaly_status:
+            params.append(f"anomaly_status={anomaly_status}")
+        
+        query_string = "&".join(params)
+        url = f"{self.money_sage_url}/transactions/{account_id}/count"
+        if query_string:
+            url += f"?{query_string}"
+            
+        return await self._make_request("GET", url, auth_header)
+
+    async def get_anomalies(self, account_id: str, auth_header: str, limit: int = 50) -> Dict[str, Any]:
+        """Get anomaly logs for an account from anomaly-sage"""
+        url = f"{self.anomaly_sage_url}/anomalies/{account_id}?limit={limit}"
+        return await self._make_request("GET", url, auth_header)
+
+    async def get_bank_info(self, auth_header: str) -> Dict[str, Any]:
+        """Get general bank information - Placeholder as this usually comes from a CMS or static info"""
+        # In a real app, this might call another service or a database
+        return {
+            "name": "Bank of Anthos",
+            "routing_number": "883745000",
+            "support_email": "support@bankofanthos.com",
+            "daily_limit": 50000
+        }

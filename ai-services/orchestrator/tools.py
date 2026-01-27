@@ -1,6 +1,7 @@
 import logging
 import random
 import uuid
+from datetime import datetime, timezone
 from typing import Dict, Any, List
 from google.generativeai.types import FunctionDeclaration, Tool
 from config import CONFIG
@@ -100,7 +101,7 @@ def create_gemini_tools():
     
     get_transactions_tool = FunctionDeclaration(
         name="get_transactions",
-        description="Get transaction history. Use 'limit' to control how many transactions to return (default 5). Use 'order' to sort by newest first (desc) or oldest first (asc). Use 'transaction_type' to filter by 'debit' (sent) or 'credit' (received). Use 'include_total' to also get total transaction count.",
+        description="Get transaction history. Use 'limit' to control how many transactions to return (default 5). Use 'order' to sort by newest first (desc) or oldest first (asc). Use 'transaction_type' to filter by 'debit' (sent) or 'credit' (received). Use 'include_total' to also get total transaction count. Results include amounts in dollars and anomaly status.",
         parameters={
             "type": "object",
             "properties": {
@@ -110,6 +111,33 @@ def create_gemini_tools():
                 "transaction_type": {"type": "string", "description": "Filter by type: 'debit' for sent money, 'credit' for received money, or omit for all"},
                 "anomaly_status": {"type": "string", "description": "Filter by anomaly status: 'normal', 'pending', 'confirmed', 'cancelled', 'expired', 'fraud', or omit for all"},
                 "include_total": {"type": "boolean", "description": "If true, also returns total transaction count for the account"}
+            },
+            "required": ["account_id"]
+        }
+    )
+
+    get_anomalies_tool = FunctionDeclaration(
+        name="get_anomalies",
+        description="Get security-related anomaly logs for an account. Useful for checking why transactions were flagged or blocked.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "account_id": {"type": "string", "description": "The user's account ID"},
+                "limit": {"type": "integer", "description": "Max number of logs to return (default 50)"}
+            },
+            "required": ["account_id"]
+        }
+    )
+
+    get_transaction_count_tool = FunctionDeclaration(
+        name="get_transaction_count",
+        description="Get the total number of transactions for an account, with optional filters.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "account_id": {"type": "string", "description": "The user's account ID"},
+                "transaction_type": {"type": "string", "description": "Filter: 'debit' or 'credit'"},
+                "anomaly_status": {"type": "string", "description": "Filter: 'normal', 'pending', 'confirmed', 'fraud'"}
             },
             "required": ["account_id"]
         }
@@ -142,17 +170,18 @@ def create_gemini_tools():
 
     deposit_funds_tool = FunctionDeclaration(
         name="deposit_funds",
-        description="Deposit funds from an external bank account into the user's account",
+        description="Deposit funds from an external bank account into the user's account. Default external account will be used if not specified.",
         parameters={
             "type": "object",
             "properties": {
                 "account_id": {"type": "string", "description": "The user's account ID (internal)"},
-                "external_account_id": {"type": "string", "description": "The sender's external account number"},
-                "external_routing_num": {"type": "string", "description": "The sender's external routing number"},
-                "amount": {"type": "number", "description": "Amount to deposit in dollars"},
+                "external_account_id": {"type": "string", "description": "The sender's external account number (default: 1234567890)"},
+                "external_routing_num": {"type": "string", "description": "The sender's external routing number (default: 123456789)"},
+                "amount": {"type": "number", "description": "Amount to deposit"},
+                "currency": {"type": "string", "description": "Currency code (e.g., USD, EUR). Default is USD."},
                 "description": {"type": "string", "description": "Description of the deposit"}
             },
-            "required": ["account_id", "external_account_id", "external_routing_num", "amount"]
+            "required": ["account_id", "amount"]
         }
     )
 
@@ -281,14 +310,39 @@ def create_gemini_tools():
         }
     )
     
+    verify_otp_tool = FunctionDeclaration(
+        name="verify_otp",
+        description="Verify a 6-digit OTP code to confirm a pending transaction",
+        parameters={
+            "type": "object",
+            "properties": {
+                "confirmation_id": {"type": "string", "description": "The confirmation ID received when OTP was sent"},
+                "otp": {"type": "string", "description": "The 6-digit code provided by the user"}
+            },
+            "required": ["confirmation_id", "otp"]
+        }
+    )
+
+    get_exchange_rate_tool = FunctionDeclaration(
+        name="get_exchange_rate",
+        description="Get the current exchange rate for a currency against USD",
+        parameters={
+            "type": "object",
+            "properties": {
+                "currency_code": {"type": "string", "description": "The currency code to check (e.g., EUR, GBP, INR)"}
+            },
+            "required": ["currency_code"]
+        }
+    )
+    
     return Tool(function_declarations=[
         get_contacts_tool, add_contact_tool, update_contact_tool, delete_contact_tool, resolve_contact_tool,
-        get_balance_tool, get_transactions_tool,
+        get_balance_tool, get_transactions_tool, get_anomalies_tool, get_transaction_count_tool,
         confirm_pending_transaction_tool, cancel_pending_transaction_tool,
-        deposit_funds_tool,
+        deposit_funds_tool, verify_otp_tool,
         get_budgets_tool, create_budget_tool, update_budget_tool, delete_budget_tool, get_spending_summary_tool,
         get_budget_overview_tool, get_saving_tips_tool,
-        send_money_tool, get_bank_info_tool
+        send_money_tool, get_bank_info_tool, get_exchange_rate_tool
     ])
 
 async def execute_tool_call(tool_call, claims: Dict[str, Any], auth_header: str, sage_services, db, currency_converter):
@@ -371,17 +425,23 @@ async def execute_tool_call(tool_call, claims: Dict[str, Any], auth_header: str,
             return result
         
         elif function_name == "deposit_funds":
-            # Simple conversion to cents
-            amount_cents = int(float(args["amount"]) * 100)
+            # Handle defaults for external account
+            ext_account = args.get("external_account_id", "1234567890")
+            ext_routing = args.get("external_routing_num", "123456789")
+            
+            # Convert currency to USD cents if needed
+            currency = args.get("currency", "USD")
+            amount_cents = await currency_converter.normalize_to_usd_cents(
+                args["amount"], currency
+            )
             
             result = await sage_services.deposit_funds(
                 {
                     "account_id": args["account_id"],
-                    "external_account_id": args["external_account_id"],
-                    "external_routing_num": args["external_routing_num"],
+                    "external_account_id": ext_account,
+                    "external_routing_num": ext_routing,
                     "amount_cents": amount_cents,
                     "description": args.get("description", "Deposit"),
-                    # uuid generation handled in service if not passed, but we can pass here
                 },
                 auth_header
             )
@@ -422,6 +482,21 @@ async def execute_tool_call(tool_call, claims: Dict[str, Any], auth_header: str,
                 return {"transactions": result}
             else:
                 return {"result": result}
+        
+        elif function_name == "get_anomalies":
+            result = await sage_services.get_anomalies(
+                args["account_id"], auth_header, limit=args.get("limit", 50)
+            )
+            return result
+        
+        elif function_name == "get_transaction_count":
+            result = await sage_services.get_transaction_count(
+                args["account_id"], 
+                auth_header,
+                transaction_type=args.get("transaction_type"),
+                anomaly_status=args.get("anomaly_status")
+            )
+            return result
 
         # Budget Management Tools
         elif function_name == "get_budgets":
@@ -434,11 +509,14 @@ async def execute_tool_call(tool_call, claims: Dict[str, Any], auth_header: str,
                 return {"result": result}
 
         elif function_name == "create_budget":
+            # Convert dollar amount to cents for service
+            limit_cents = int(float(args["budget_limit"]) * 100)
+            
             result = await sage_services.create_budget(
                 args["account_id"],
                 {
                     "category": args["category"],
-                    "budget_limit": args["budget_limit"],
+                    "budget_limit": limit_cents,
                     "period_start": args["period_start"],
                     "period_end": args["period_end"]
                 },
@@ -453,7 +531,8 @@ async def execute_tool_call(tool_call, claims: Dict[str, Any], auth_header: str,
             # Construct update payload with only provided fields
             update_data = {}
             if "budget_limit" in args:
-                update_data["budget_limit"] = args["budget_limit"]
+                # Convert dollar amount to cents
+                update_data["budget_limit"] = int(float(args["budget_limit"]) * 100)
             if "period_start" in args:
                 update_data["period_start"] = args["period_start"]
             if "period_end" in args:
@@ -522,11 +601,14 @@ async def execute_tool_call(tool_call, claims: Dict[str, Any], auth_header: str,
             )
             
             # Check for anomalies first
+            routing_num = args.get("routing_num", "883745000")
+            is_external = routing_num != "883745000"
+            
             anomaly_result = await sage_services.detect_anomaly(
                 args["from_account_id"],
                 amount_cents,
                 to_account_id,
-                False,  # Assuming internal transfer
+                is_external,
                 auth_header
             )
             
@@ -541,10 +623,10 @@ async def execute_tool_call(tool_call, claims: Dict[str, Any], auth_header: str,
                     "transaction": {
                         "fromAccountNum": args["from_account_id"],
                         "toAccountNum": to_account_id,
-                        "toRoutingNum": args.get("routing_num", "883745000"),
+                        "toRoutingNum": routing_num,
                         "amount": amount_cents,
                         "description": args["description"],
-                        "is_external": False
+                        "is_external": is_external
                     }
                 }
                 confirmation = db.create_otp_confirmation(claims.get("acct") or claims.get("accountId"), confirmation_payload, ttl_seconds=300)
@@ -575,12 +657,13 @@ async def execute_tool_call(tool_call, claims: Dict[str, Any], auth_header: str,
             transaction_result = await sage_services.execute_transaction(
                 {
                     "fromAccountNum": args["from_account_id"],
-                    "fromRoutingNum": CONFIG.local_routing_num,
+                    "fromRoutingNum": "883745000",
                     "toAccountNum": to_account_id,
-                    "toRoutingNum": CONFIG.local_routing_num,
+                    "toRoutingNum": routing_num,
                     "amount": amount_cents,
                     "uuid": str(uuid.uuid4()),
-                    "description": args["description"]
+                    "description": args["description"],
+                    "is_external": is_external
                 },
                 auth_header
             )
@@ -604,9 +687,62 @@ async def execute_tool_call(tool_call, claims: Dict[str, Any], auth_header: str,
             else:
                 return info
 
-        else:
-            return {"error": f"Unknown tool function: {function_name}"}
-    
+        elif function_name == "verify_otp":
+            # Verify OTP logic (reusing implementation from main.py but for tool call)
+            confirmation_id = args["confirmation_id"]
+            otp = args["otp"]
+            account_id = claims.get("acct") or claims.get("accountId")
+            
+            conf = db.get_confirmation(confirmation_id)
+            if not conf or conf["status"] != "pending":
+                return {"error": "Confirmation not found or already processed"}
+            
+            if conf["account_id"] != account_id:
+                return {"error": "Not authorized to verify this transaction"}
+            
+            if datetime.now(timezone.utc) > conf["expires_at"]:
+                db.update_confirmation_status(confirmation_id, "expired")
+                return {"error": "OTP has expired"}
+            
+            payload = conf["payload"]
+            if payload.get("otp") != otp:
+                attempts = payload.get("attempts", 0) + 1
+                payload["attempts"] = attempts
+                if attempts >= payload.get("max_attempts", 3):
+                    db.update_confirmation_status(confirmation_id, "failed")
+                    return {"error": "Too many incorrect OTP attempts. Transaction cancelled."}
+                db.update_confirmation_status(confirmation_id, "pending", payload)
+                return {"error": f"Incorrect OTP. {payload.get('max_attempts', 3) - attempts} attempts remaining."}
+            
+            # Success!
+            db.update_confirmation_status(confirmation_id, "confirmed")
+            
+            # Tell anomaly-sage this log_id is now confirmed
+            await sage_services.confirm_pending_transaction(payload.get("log_id"), auth_header)
+            
+            # Execute actual transaction
+            txn_data = payload.get("transaction")
+            txn_data["uuid"] = str(uuid.uuid4()) # New UUID for retry
+            
+            result = await sage_services.execute_transaction(txn_data, auth_header)
+            return {
+                "status": "success",
+                "message": "OTP verified successfully. Transaction completed.",
+                "details": result
+            }
+        
+        elif function_name == "get_exchange_rate":
+            currency = args["currency_code"]
+            # To get rate: 1 unit = X USD
+            # normalize_to_usd_cents(1.0, currency) / 100
+            try:
+                rate_cents = await currency_converter.normalize_to_usd_cents(1.0, currency)
+                rate_usd = rate_cents / 100.0
+                return {"currency": currency, "rate_in_usd": rate_usd, "formatted": f"1 {currency.upper()} = ${rate_usd:.4f} USD"}
+            except Exception as e:
+                return {"error": f"Could not get exchange rate for {currency}: {str(e)}"}
+            
+        return {"error": f"Function {function_name} not implemented"}
     except Exception as e:
-        logger.error(f"Error executing tool {function_name}: {str(e)}")
-        return {"error": f"Failed to execute {function_name}: {str(e)}"}
+        logger.error(f"Tool execution error: {str(e)}")
+        return {"error": f"Tool execution failed: {str(e)}"}
