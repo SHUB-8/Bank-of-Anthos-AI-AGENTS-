@@ -304,11 +304,6 @@ async def deposit_funds(req: DepositRequest, authorization: str = Header(...), c
     if req.amount_cents > 5000000:
         raise HTTPException(status_code=400, detail="Deposit amount exceeds the $50,000 daily limit.")
 
-    # Validation: Cannot deposit from local bank routing number (would use internal transfer instead)
-    # UPDATED: Allow legacy frontend default bank (883745000) to simulation deposits
-    # if req.external_routing_num == LOCAL_ROUTING_NUM:
-    #     raise HTTPException(status_code=400, detail="Use standard transfer for internal accounts.")
-
     # Ledgerwriter Payload
     ledger_payload = {
         "fromAccountNum": req.external_account_id,
