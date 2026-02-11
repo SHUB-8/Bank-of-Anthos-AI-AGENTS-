@@ -202,6 +202,14 @@ class ServiceTester:
         else:
             print_fail(f"Get Transactions ({resp.status_code if resp else 'No Resp'})")
 
+        # 3b. Get Transaction Count
+        resp = self._get(f"{MONEY_SAGE_URL}/transactions/{self.account_id}/count")
+        if resp and resp.status_code == 200:
+            count = resp.json().get('total_count')
+            print_success(f"Get Transaction Count: {count}")
+        else:
+            print_fail(f"Get Transaction Count ({resp.status_code if resp else 'No Resp'})")
+
         # 4. Create Budget
         category = "TestCategory"
         budget_payload = {
@@ -211,10 +219,15 @@ class ServiceTester:
             "period_end": "2025-01-31"
         }
         resp = self._post(f"{MONEY_SAGE_URL}/budgets/{self.account_id}", budget_payload)
+        # Note: If budget exists this might fail or succeed depending on logic.
+        # Assuming clean slate or it handles duplicates gracefully (DB constraints usually fail).
+        # We can try DELETE first to ensure clean state
+        self._delete(f"{MONEY_SAGE_URL}/budgets/{self.account_id}/{category}")
+        
+        resp = self._post(f"{MONEY_SAGE_URL}/budgets/{self.account_id}", budget_payload)
         if resp and resp.status_code == 200:
             print_success(f"Create Budget '{category}'")
         else:
-            # Might fail if already exists, try delete first just in case? No, let's just report
             print_fail(f"Create Budget ({resp.status_code if resp else 'No Resp'}): {resp.text if resp else ''}")
 
         # 5. Get Budgets
@@ -224,6 +237,9 @@ class ServiceTester:
             found = any(b['category'] == category for b in budgets)
             if found:
                 print_success(f"Get Budgets (Found '{category}')")
+                # Check for spent field
+                if budgets and 'spent' in budgets[0]:
+                     print_success(f"Get Budgets includes 'spent' field")
             else:
                 print_fail(f"Get Budgets (Budget '{category}' not found)")
         else:
@@ -288,22 +304,29 @@ class ServiceTester:
         if resp and resp.status_code == 200:
             data = resp.json()
             status = data.get('status')
-            if status in ['suspicious', 'fraud']:
+            if status in ['suspicious', 'pending', 'fraud']: 
                 print_success(f"Detect Anomaly (High Amount) - Status: {status}")
                 
-                # Test Confirm/Cancel if suspicious
+                # Test Confirm/Cancel if pending/suspicious
                 log_id = data.get('log_id')
-                if log_id and status == 'suspicious':
-                    # Cancel
-                    cancel_resp = self._post(f"{ANOMALY_SAGE_URL}/cancel-suspicious/{log_id}", {})
+                if log_id and (status == 'pending' or status == 'suspicious'):
+                    # Cancel (Using new endpoint)
+                    cancel_resp = self._post(f"{ANOMALY_SAGE_URL}/cancel-pending/{log_id}", {})
                     if cancel_resp and cancel_resp.status_code == 200:
-                        print_success("Cancel Suspicious Transaction")
+                        print_success("Cancel Pending Transaction")
                     else:
-                        print_fail("Cancel Suspicious Transaction")
+                        print_fail(f"Cancel Pending Transaction: {cancel_resp.text if cancel_resp else ''}")
             else:
-                print_info(f"Detect Anomaly (High Amount) - Status: {status} (Expected suspicious/fraud)")
+                print_info(f"Detect Anomaly (High Amount) - Status: {status} (Expected pending/fraud)")
         else:
             print_fail(f"Detect Anomaly High ({resp.status_code if resp else 'No Resp'})")
+
+        # 4. Get Anomalies
+        resp = self._get(f"{ANOMALY_SAGE_URL}/anomalies/{self.account_id}")
+        if resp and resp.status_code == 200:
+            print_success("Get Anomalies Log")
+        else:
+            print_fail(f"Get Anomalies Log ({resp.status_code if resp else 'No Resp'})")
 
     # ==========================================
     # Transaction Sage Tests
@@ -332,6 +355,21 @@ class ServiceTester:
             print_success("Execute Transaction")
         else:
             print_fail(f"Execute Transaction ({resp.status_code if resp else 'No Resp'}): {resp.text if resp else ''}")
+
+        # 3. Deposit Funds
+        deposit_payload = {
+            "account_id": self.account_id,
+            "external_account_id": "9999999999",
+            "external_routing_num": "111111111",
+            "amount_cents": 50000, # $500.00
+            "description": "Test Deposit",
+            "uuid": str(uuid.uuid4())
+        }
+        resp = self._post(f"{TRANSACTION_SAGE_URL}/v1/deposit", deposit_payload)
+        if resp and resp.status_code == 200:
+            print_success("Deposit Funds")
+        else:
+            print_fail(f"Deposit Funds ({resp.status_code if resp else 'No Resp'}): {resp.text if resp else ''}")
 
     # ==========================================
     # Orchestrator Tests
@@ -373,20 +411,66 @@ class ServiceTester:
             # 5. Mark Read (if any)
             if notifs:
                 notif_id = notifs[0]['id']
-                resp = self._post(f"{ORCHESTRATOR_URL}/notifications/mark-read", [notif_id])
+                # Changed endpoint to /notifications/read and payload is list of IDs
+                resp = self._post(f"{ORCHESTRATOR_URL}/notifications/read", [notif_id])
                 if resp and resp.status_code == 200:
                     print_success("Mark Notification Read")
                 else:
-                    print_fail("Mark Notification Read")
+                    print_fail(f"Mark Notification Read: {resp.text if resp else ''}")
         else:
             print_fail("Get Notifications")
 
-        # 6. Clear Cache (Admin)
+        # 6. Sessions Management
+        resp = self._get(f"{ORCHESTRATOR_URL}/sessions")
+        if resp and resp.status_code == 200:
+            print_success("Get User Sessions")
+            sessions = resp.json().get('sessions', [])
+            
+            # 6b. Get Messages for a specific session (if any exist)
+            if sessions:
+                s_id = sessions[0]['session_id']
+                resp_msgs = self._get(f"{ORCHESTRATOR_URL}/sessions/{s_id}/messages")
+                if resp_msgs and resp_msgs.status_code == 200:
+                    print_success(f"Get Session Messages for {s_id}")
+                else:
+                    print_fail(f"Get Session Messages ({resp_msgs.status_code if resp_msgs else 'No Resp'})")
+                    
+                # 6c. Delete Session
+                if len(sessions) > 1: # Only delete if we have multiple, to preserve one for testing? Or just delete one.
+                    del_id = sessions[-1]['session_id'] # Delete the last one (probably oldest or newest depending on sort)
+                    # For safety, let's create a dummy session to delete
+                    dummy_sid = str(uuid.uuid4())
+                    # Need to populate it first? The Delete endpoint checks if it exists.
+                    # Actually, we can just delete the one we used for chat above 'session_id'
+                    resp_del = self._delete(f"{ORCHESTRATOR_URL}/sessions/{session_id}")
+                    if resp_del and resp_del.status_code == 200:
+                         print_success(f"Delete Session {session_id}")
+                    else:
+                         print_fail(f"Delete Session ({resp_del.status_code if resp_del else 'No Resp'})")
+            
+        else:
+            print_fail("Get User Sessions")
+
+        # 7. Verify OTP (Negative Test)
+        # Since we don't have a valid OTP flow triggered here easily without user interaction simulation
+        # We will basic validation test (expecting 404 or 400)
+        otp_payload = {
+            "confirmation_id": "invalid-conf-id",
+            "otp": "123456"
+        }
+        resp = self._post(f"{ORCHESTRATOR_URL}/verify-otp", otp_payload)
+        if resp and resp.status_code == 404:
+             print_success("Verify OTP (Negative Test - Handled correctly)")
+        else:
+             print_fail(f"Verify OTP (Negative Test) - Unexpected status: {resp.status_code if resp else 'No Resp'}")
+
+        # 8. Clear Cache (Admin)
         resp = self._post(f"{ORCHESTRATOR_URL}/admin/clear-cache", {})
         if resp and resp.status_code == 200:
             print_success("Clear Cache")
         else:
             print_fail("Clear Cache")
+
 
 def run_all_tests():
     if len(sys.argv) < 2:

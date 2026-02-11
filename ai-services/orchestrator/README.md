@@ -38,10 +38,10 @@ The service requires the following environment variables:
 | `GEMINI_API_KEY` | **Yes** | Google Gemini API key for AI processing | `AIza...` |
 | `AI_META_DB_URI` | **Yes** | PostgreSQL connection URI for metadata | `postgresql://user:pass@ai-meta-db:5432/ai-meta-db` |
 | `JWT_PUBLIC_KEY` | **Yes** | RS256 public key for JWT validation | PEM-encoded public key |
-| `CONTACT_SAGE_URL` | No | Contact service URL | `http://contact-sage:8080` |
-| `ANOMALY_SAGE_URL` | No | Anomaly detection service URL | `http://anomaly-sage:8080` |
-| `TRANSACTION_SAGE_URL` | No | Transaction service URL | `http://transaction-sage:8080` |
-| `MONEY_SAGE_URL` | No | Financial insights service URL | `http://money-sage:8080` |
+| `CONTACT_SAGE_URL` | No | Contact service URL | `http://contact-sage:8083` |
+| `ANOMALY_SAGE_URL` | No | Anomaly detection service URL | `http://anomaly-sage:8085` |
+| `TRANSACTION_SAGE_URL` | No | Transaction service URL | `http://transaction-sage:8086` |
+| `MONEY_SAGE_URL` | No | Financial insights service URL | `http://money-sage:8084` |
 
 ---
 
@@ -62,7 +62,7 @@ The service requires the following environment variables:
 }
 ```
 
-### 2. Chat Interface
+### 2. Chat Interface (Standard)
 - **Method**: `POST`
 - **Endpoint**: `/chat`
 - **Description**: Process natural language queries and return conversational responses.
@@ -80,9 +80,28 @@ The service requires the following environment variables:
 ```json
 {
   "session_id": "user-12345-session-67890", 
-  "response": "I've successfully sent €50.00 to Alice for dinner. The transaction has been processed and Alice should receive the funds shortly. Your new account balance is $1,847.32."
+  "response": "I've sent €50.00 to Alice..."
 }
 ```
+
+### 3. Chat Interface (Streaming)
+- **Method**: `POST`
+- **Endpoint**: `/chat/stream`
+- **Description**: Streaming version of the chat endpoint for real-time UI feedback.
+- **Response**: Server-Sent Events (SSE) stream.
+
+### 4. Session Management
+The orchestrator provides endpoints to manage conversation history:
+- **GET /session-id**: Generate a new unique session ID.
+- **GET /sessions**: List all past sessions for the user.
+- **GET /sessions/{session_id}/messages**: Retrieve message history for a specific session.
+- **DELETE /sessions/{session_id}**: Delete a session and its history.
+- **POST /admin/clear-cache**: Admin endpoint to clear server-side caches.
+
+### 5. Notifications & Security
+- **GET /notifications**: Get user alerts and notifications.
+- **POST /notifications/read**: Mark notifications as read.
+- **POST /verify-otp**: Verify a One-Time Password for transaction confirmation.
 
 **Error Responses**:
 - `401 Unauthorized`: Invalid or missing JWT token
@@ -128,20 +147,22 @@ The orchestrator maintains context across conversations:
 
 ### Database Schema
 
-The service manages two main tables in `ai-meta-db`:
+The service manages the following tables in `ai-meta-db`:
 
 **exchange_rates**:
-- Caches currency conversion rates with 24-hour refresh cycle
-- Supports fallback to multiple exchange rate APIs
+- Caches currency conversion rates with 24-hour refresh cycle.
+- Stores `currency_code` and its `rate_to_usd`.
 
 **agent_memory**:
-- Stores conversation history in Gemini-compatible format
-- Enables persistent multi-turn conversations
-- Automatic cleanup of old conversations
+- Stores conversation history in Gemini-compatible format.
+- Enables persistent multi-turn conversations across sessions.
 
 **session_metadata**:
-- Tracks active sessions and usage metrics
-- Enables session management and monitoring
+- Tracks active sessions, `account_id` association, and `message_count`.
+- Enables session management and monitoring.
+
+**llm_envelopes & envelope_correlations**:
+- Audit trail for AI decisions, linking intent to specific results (anomalies, transactions).
 
 ### Service Integration
 

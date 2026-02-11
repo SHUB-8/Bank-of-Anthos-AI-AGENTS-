@@ -58,27 +58,18 @@ All endpoints require a valid JWT `Authorization: Bearer <token>` header, except
 -   **Endpoint**: `/transactions/{account_id}`
 -   **Query Parameters**:
     -   `limit` (optional): Maximum number of transactions to return (default: 5)
--   **Description**: Retrieves recent transaction logs from ai-meta-db with category and amount information for spending analysis.
--   **Success Response (`200 OK`)**:
-    ```json
-    {
-      "account_id": "7072261198",
-      "count": 10,
-      "limit": 10,
-      "transactions": [
-        {
-          "id": "uuid-here",
-          "transaction_id": 123,
-          "account_id": "7072261198",
-          "amount": 5500,
-          "amount_dollars": 55.00,
-          "category": "Dining"
-        }
-      ]
-    }
-    ```
+    -   `order` (optional): 'desc' (default) or 'asc'
+    -   `transaction_type` (optional): 'debit' or 'credit'
+    -   `anomaly_status` (optional): 'normal', 'suspicious', 'fraud'
+-   **Description**: Retrieves recent transaction logs from ai-meta-db.
 
-### 4. Budget Management (CRUD)
+### 4. Get Transaction Count
+-   **Method**: `GET`
+-   **Endpoint**: `/transactions/{account_id}/count`
+-   **Description**: Returns the total number of transactions for the account.
+-   **Success Response**: `{"count": 42}`
+
+### 5. Budget Management (CRUD)
 
 #### Create a New Budget
 -   **Method**: `POST`
@@ -136,7 +127,7 @@ All endpoints require a valid JWT `Authorization: Bearer <token>` header, except
     }
     ```
 
-### 5. Insights & Analysis
+### 6. Insights & Analysis
 
 #### Get Spending Summary
 -   **Method**: `GET`

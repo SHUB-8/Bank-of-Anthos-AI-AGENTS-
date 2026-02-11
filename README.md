@@ -1,37 +1,106 @@
-# Bank of Anthos
-
-<!-- Checks badge below seem to take a "neutral" check as a negative and shows failures if some checks are neutral. Commenting out the badge for now. -->
-<!-- ![GitHub branch check runs](https://img.shields.io/github/check-runs/GoogleCloudPlatform/bank-of-anthos/main) -->
-[![Website](https://img.shields.io/website?url=https%3A%2F%2Fcymbal-bank.fsi.cymbal.dev%2F&label=live%20demo
-)](https://cymbal-bank.fsi.cymbal.dev)
+# Bank of Anthos (AI-Enhanced)
 
 **Bank of Anthos** is a sample HTTP-based web app that simulates a bank's payment processing network, allowing users to create artificial bank accounts and complete transactions.
 
-Google uses this application to demonstrate how developers can modernize enterprise applications using Google Cloud products, including: [Google Kubernetes Engine (GKE)](https://cloud.google.com/kubernetes-engine), [Anthos Service Mesh (ASM)](https://cloud.google.com/anthos/service-mesh), [Anthos Config Management (ACM)](https://cloud.google.com/anthos/config-management), [Migrate to Containers](https://cloud.google.com/migrate/containers), [Spring Cloud GCP](https://spring.io/projects/spring-cloud-gcp), [Cloud Operations](https://cloud.google.com/products/operations), [Cloud SQL](https://cloud.google.com/sql/docs), [Cloud Build](https://cloud.google.com/build), and [Cloud Deploy](https://cloud.google.com/deploy). This application works on any Kubernetes cluster.
+Originally developed by [Google Cloud](https://github.com/GoogleCloudPlatform/bank-of-anthos) as a reference application to demonstrate enterprise modernization with products like [GKE](https://cloud.google.com/kubernetes-engine), [Anthos Service Mesh](https://cloud.google.com/anthos/service-mesh), and [Cloud SQL](https://cloud.google.com/sql/docs), the original system was a straightforward CRUD banking app — users could sign up, log in, send payments, and view transaction history. It had no fraud detection, no budgeting, no AI, and no conversational interface.
 
-If you are using Bank of Anthos, please ★Star this repository to show your interest!
+**This fork extends the original Bank of Anthos with a full AI-powered services layer**, adding intelligent features on top of the existing core without modifying any of the original microservices.
 
-**Note to Googlers:** Please fill out the form at [go/bank-of-anthos-form](https://goto2.corp.google.com/bank-of-anthos-form).
+---
+
+## What Changed: Original vs. AI-Enhanced
+
+| Capability | Original Bank of Anthos | This Fork (AI-Enhanced) |
+|:---|:---|:---|
+| **User Interface** | Basic Jinja2-templated HTML pages | Modern React/Vite SPA with Tailwind CSS |
+| **Transactions** | Manual form-based send/deposit | Manual + Natural language Query Transactions  |
+| **Fraud Detection** | None | Real-time anomaly detection with explainable risk scores |
+| **Budgeting** | None | Full CRUD budget management with spend tracking |
+| **Financial Insights** | None | AI-powered spending summaries and saving tips (Gemini) |
+| **Contact Management** | Basic add-only list | Fuzzy name matching, validation, update, and delete (CRUD) |
+| **Conversational AI** | None | Multi-turn chat assistant powered by Google Gemini which can perform all banking tasks supported by system via natural language |
+| **Currency Support** | USD only | Automatic multi-currency conversion with live rates |
+| **Core Services Modified** | — | **Zero.** All original Java/Python services are untouched. |
+
+### Design Philosophy: Additive Architecture
+
+The key architectural decision was to build **on top of** the existing system rather than refactoring it. As shown in the architecture diagram:
+
+- **The core services are untouched.** The Java services (`ledger-writer`, `balance-reader`, `transaction-history`) and the Python services (`user-service`, `contacts`) run exactly as Google designed them. No code was changed, no APIs were altered.
+- **The AI layer acts as an intelligent middleware.** New "Sage" microservices sit between the frontend and the core, consuming the original services' HTTP APIs as data sources. For example, `anomaly-sage` calls `balance-reader` and `transaction-history` to gather data for its risk analysis — the core services don't even know AI exists.
+- **A dedicated AI metadata database (`ai-meta-db`)** was added to store all new state (anomaly logs, budgets, transaction categories, user profiles, conversation history) without touching the original `accounts-db` or `ledger-db`.
+- **The frontend was rebuilt** as a modern React SPA, but it communicates through the same Ingress, proxying AI requests to the new services and core requests to the original endpoints.
+
+This approach proves that complex AI capabilities can be layered onto legacy microservice systems **without any refactoring risk** — a pattern directly applicable to real enterprise modernization.
+
+---
+
+## Architecture
+
+![Architecture Diagram](docs/img/architecture.png)
+
+The system is organized into three distinct layers, all deployed on **Kubernetes** and horizontally scalable:
+
+### Layer 1: Frontend (Cyan)
+The new React/Vite frontend serves as the single entry point via a Kubernetes Ingress. It routes API calls to both the AI services layer and the original core services through path-based routing (e.g., `/api/orchestrator`, `/api/contact-sage`, `/api/userservice`).
+
+### Layer 2: AI Services (Green)
+Five specialized Python microservices powered by **FastAPI**, each with a single responsibility:
+- **Orchestrator** — The central brain. Uses **Google Gemini** for natural language understanding, intent classification, entity extraction, and multi-turn conversation. It coordinates all other Sage services.
+- **Anomaly Sage** — Real-time fraud detection using statistical analysis (Welford's algorithm for running mean/variance), velocity checks, and new-recipient detection. Returns explainable risk scores.
+- **Money Sage** — Budget management and financial insights. Uses **Google Gemini** to analyze spending patterns and generate personalized saving tips.
+- **Transaction Sage** — Intelligent transaction execution with automatic categorization (30+ category keywords), budget enforcement, and detailed logging.
+- **Contact Sage** — Smart contact resolution using fuzzy matching (`thefuzz`), internal account validation, and full CRUD operations.
+- **AI-Meta-DB** — Shared PostgreSQL database storing all AI state: anomaly logs, transaction logs, budgets, user profiles, conversation memory, and exchange rates.
+
+### Layer 3: Core Banking Services (Orange)
+The original, **unmodified** Google Bank of Anthos services:
+- **UserService** (Python) — Authentication and JWT signing.
+- **Contacts** (Python) — Core contact storage.
+- **LedgerWriter** (Java) — Immutable transaction ledger writes.
+- **BalanceReader** (Java) — Cached account balance reads.
+- **TransactionHistory** (Java) — Cached transaction history reads.
+- **AccountsDB / LedgerDB** (PostgreSQL) — Original data stores.
+
+### External Services (Yellow)
+- **Google Gemini API** — Powers NLU in the Orchestrator and financial advice in Money Sage.
+- **Exchange Rate API** — Provides live currency conversion rates with 24-hour caching and API fallback.
+
 
 ## Screenshots
+
+### Sign In & Sign Up
+| Sign In | Sign Up |
+|:---:|:---:|
+| ![Sign In](docs/img/SignIn.png) | ![Sign Up](docs/img/SignUp.png) |
 
 ### Dashboard
 ![Dashboard](docs/img/Dashboard.png)
 
-### Budgets
-![Budgets](docs/img/Budget-Management.png)
+### AI Conversational Assistant
+![AI Assistant](docs/img/Conversation-Agent.png) 
 
-### Contacts
-![Contacts](docs/img/Contact-Management.png)
+### Payments
+![Payments](docs/img/Payments.png)
 
-### Transactions
+### Transaction History
 ![Transactions](docs/img/Transaction-History.png)
 
+### Anomaly Detection & Security
+| Anomaly Logs | Security Review |
+|:---:|:---:|
+| ![Anomaly Logs](docs/img/Anomaly-Logs.png) | ![Security Review](docs/img/Security-Review.png) |
 
-## Service architecture
+### Budget Management
+![Budgets](docs/img/Budget-Management.png)
 
-![Architecture Diagram](/docs/img/architecture.png)
+### Contact Management
+![Contacts](docs/img/Contact-Management.png)
 
+
+## Services
+
+### Core Banking Services (Unchanged from Google's Original)
 
 | Service                                                 | Language      | Description                                                                                                                                |
 | ------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -43,27 +112,55 @@ If you are using Bank of Anthos, please ★Star this repository to show your int
 | [user-service](/src/accounts/userservice)              | Python        | Manages user accounts and authentication. Signs JWTs used for authentication by other services.                                            |
 | [contacts](/src/accounts/contacts)                     | Python        | Stores list of other accounts associated with a user. Used for drop down in "Send Payment" and "Deposit" forms.                            |
 | [accounts-db](/src/accounts/accounts-db)               | PostgreSQL    | Database for user accounts and associated data. Option to pre-populate with demo users.                                                    |
-| [ai-meta-db](/ai-services/ai-meta-db)                  | PostgreSQL    | Central AI metadata database for anomaly detection, transaction logging, budget tracking, and user profiles.                               |
-| [anomaly-sage](/ai-services/anomaly-sage)              | Python        | AI microservice for risk analysis and anomaly detection. Logs results to `ai-meta-db`.                                                     |
-| [transaction-sage](/ai-services/transaction-sage)      | Python        | AI microservice for transaction categorization, logging, and budget usage. Logs results to `ai-meta-db`.                                   |
-| [contact-sage](/ai-services/contact-sage)              | Python        | AI microservice for contact inference and enrichment (e.g., identify likely payees / contact suggestions). Logs results to `ai-meta-db`.    |
-| [money-sage](/ai-services/money-sage)                  | Python        | AI microservice for budgeting, spend classification, and money-related insights. Logs results to `ai-meta-db`.                             |
-| [orchestrator](/ai-services/orchestrator)              | Python        | Coordinator service that invokes AI agent microservices, handles auth, and provides shared helpers (currency conversion, config).        |
+| [loadgenerator](/src/loadgenerator)                    | Python/Locust | Continuously sends requests imitating users to the frontend. Periodically creates new accounts and simulates transactions between them.    |
+
+### AI Services Layer (New)
+
+| Service                                                 | Language      | Description                                                                                                                                |
+| ------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| [orchestrator](/ai-services/orchestrator)              | Python        | Central AI coordinator powered by **Google Gemini**. Provides a conversational chat interface, handles NLU, intent classification, entity extraction, and orchestrates all other AI agents. |
+| [anomaly-sage](/ai-services/anomaly-sage)              | Python        | Real-time fraud detection engine. Uses statistical analysis (Welford's algorithm) and multi-factor risk scoring to classify transactions as `normal`, `pending`, or `fraud` with explainable reasons. |
+| [money-sage](/ai-services/money-sage)                  | Python        | Financial insights and budget management. Provides spending summaries, budget CRUD, and **Gemini-powered** personalized saving tips.       |
+| [transaction-sage](/ai-services/transaction-sage)      | Python        | Intelligent transaction execution. Auto-categorizes transactions (30+ categories), enforces budget limits, and logs detailed records before calling the core `ledger-writer`. |
+| [contact-sage](/ai-services/contact-sage)              | Python        | Smart contact management. Extends the core `contacts` service with fuzzy name matching, internal account validation, and direct update/delete operations. |
+| [ai-meta-db](/ai-services/ai-meta-db)                  | PostgreSQL    | Shared AI metadata database. Stores anomaly logs, transaction logs, budgets, user profiles, conversation memory, exchange rates, and audit trails. |
+
+### New Frontend (New)
+
+| Service                                                 | Language      | Description                                                                                                                                |
+| ------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| [new-frontend](/New_Frontend)                          | TypeScript    | Modern React/Vite SPA with Tailwind CSS. Replaces the original Jinja2 templates with a responsive, component-based UI featuring the AI chat assistant, budget dashboards, and anomaly logs. |
 
 
-### AI Agent Microservices
+### How the AI Layer Integrates (No Core Changes)
 
-**anomaly-sage**: Performs risk analysis and anomaly detection on transactions. It writes risk scores and classifications to the `anomaly_logs` table in `ai-meta-db`.
+The AI services consume the core services' existing HTTP APIs — they don't modify them:
 
-**transaction-sage**: Categorizes transactions, logs details, and tracks budget usage. It writes to the `transaction_logs` and `budget_usage` tables in `ai-meta-db`.
+```
+User Query: "Send $50 to Bob for lunch"
+    │
+    ▼
+┌─────────────────┐
+│   Orchestrator  │──── Gemini API (intent: send_money, amount: $50, recipient: "Bob")
+└────────┬────────┘
+         │
+    ┌────▼─────┐
+    │Contact   │──── Calls core `contacts` service via HTTP ──► Resolves "Bob" → account 9530551227
+    │  Sage    │
+    └────┬─────┘
+         │
+    ┌────▼─────┐
+    │Anomaly   │──── Calls core `balance-reader` & `transaction-history` via HTTP ──► Risk score: 0.15 (normal)
+    │  Sage    │
+    └────┬─────┘
+         │
+    ┌────▼───────┐
+    │Transaction │──── Calls core `ledger-writer` via HTTP ──► Transaction executed
+    │   Sage     │
+    └────────────┘
+```
 
-**ai-meta-db**: Central PostgreSQL database for AI agent microservices. Stores logs, budgets, user profiles, and pending confirmations. See [README-ai-meta-db.md](/ai-services/README-ai-meta-db.md) for schema details.
-
-**contact-sage**: Provides contact-related inference and enrichment for accounts and transactions. Examples: suggest likely payees, normalize contact details, or enrich transaction payee metadata. Writes contact-related events to `ai-meta-db`.
-
-**money-sage**: Focuses on budgeting, spend classification and money-management insights (alerts, monthly summaries). Stores budget and classification outputs in `ai-meta-db`.
-
-**orchestrator**: A small coordinator service used by the AI agents. It contains shared auth helpers (`auth.py`), configuration (`config.py`), currency conversion utilities (`currency_converter.py`), and wiring to call other sage services. It can be used to run or locally emulate agent workflows and exposes its own `main.py` entrypoint.
+> **Every core service is called through its original, unmodified REST API.** The AI layer is purely additive.
 
 ### Running & testing AI services (local / dev)
 
@@ -134,14 +231,7 @@ The following button opens up an interactive tutorial showing how to deploy Bank
 
    ```sh
    kubectl apply -f ./extras/jwt/jwt-secret.yaml
-   kubectl apply -f ./kubernetes-manifests
-   # Deploy AI agent microservices and metadata DB
-   kubectl apply -f ./kubernetes-manifests/ai-meta-db.yaml
-   kubectl apply -f ./kubernetes-manifests/anomaly-sage.yaml
-   kubectl apply -f ./kubernetes-manifests/transaction-sage.yaml
-   kubectl apply -f ./kubernetes-manifests/contact-sage.yaml
-   kubectl apply -f ./kubernetes-manifests/money-sage.yaml
-   kubectl apply -f ./kubernetes-manifests/orchestrator.yaml
+   kubectl apply -f ./kubernetes-manifests/
    ```
 
 
@@ -202,14 +292,19 @@ The following button opens up an interactive tutorial showing how to deploy Bank
 
 ## Documentation
 
-<!-- This section is duplicated in the docs/ README: https://github.com/GoogleCloudPlatform/bank-of-anthos/blob/main/docs/README.md -->
-
-- [GKE Autopilot Deployment Guide](/docs/GKE_AUTOPILOT_DEPLOYMENT.md) – Step-by-step instructions for creating and deleting clusters on GKE Autopilot using PowerShell.
-- [Development](/docs/development.md) to learn how to run and develop this app locally.
-- [Environments](/docs/environments.md) to learn how to deploy on non-GKE clusters.
-- [Workload Identity](/docs/workload-identity.md) to learn how to set-up Workload Identity.
-- [CI/CD pipeline](/docs/ci-cd-pipeline.md) to learn details about and how to set-up the CI/CD pipeline.
-- [Troubleshooting](/docs/troubleshooting.md) to learn how to resolve common problems.
+- [AI Services Overview](/ai-services/README.md) — Architecture, agent responsibilities, API contracts, and full AI-Meta DB schema.
+- [Orchestrator](/ai-services/orchestrator/README.md) — Gemini-powered conversational AI engine.
+- [Anomaly Sage](/ai-services/anomaly-sage/README.md) — Fraud detection and risk scoring.
+- [Money Sage](/ai-services/money-sage/README.md) — Budget management and financial insights.
+- [Transaction Sage](/ai-services/transaction-sage/README.md) — Intelligent transaction execution.
+- [Contact Sage](/ai-services/contact-sage/README.md) — Smart contact management with fuzzy matching.
+- [GKE Autopilot Deployment Guide](/docs/GKE_AUTOPILOT_DEPLOYMENT.md) — Cluster setup on GKE Autopilot.
+- [Local Development](/docs/LOCAL_DEVELOPMENT.md) — Running the full stack locally.
+- [Development](/docs/development.md) — General development guide.
+- [Environments](/docs/environments.md) — Deploying on non-GKE clusters.
+- [Workload Identity](/docs/workload-identity.md) — GKE Workload Identity setup.
+- [CI/CD pipeline](/docs/ci-cd-pipeline.md) — CI/CD pipeline details.
+- [Troubleshooting](/docs/troubleshooting.md) — Common issues and fixes.
 
 ## Requirements
 - Python 3.12+

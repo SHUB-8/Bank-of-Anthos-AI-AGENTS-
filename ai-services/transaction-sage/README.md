@@ -48,6 +48,22 @@ This service is the final step in the AI-driven transaction flow.
     ```
     (No JSON body; transaction_id will be `None` in transaction-sage response.)
 
+### 2. Deposit Funds
+-   **Method**: `POST`
+-   **Endpoint**: `/v1/deposit`
+-   **Description**: Process a deposit from an external account. Does not trigger anomaly checks but logs the transaction.
+-   **Request Body**:
+    ```json
+    {
+      "account_id": "7072261198",
+      "external_account_id": "EXT-123",
+      "external_routing_num": "999",
+      "amount_cents": 10000,
+      "description": "Paycheck",
+      "uuid": "<request-uuid>"
+    }
+    ```
+
 -   **Error Response (`402 Payment Required`, `400 Bad Request`, `401 Unauthorized`, or `500 Internal Server Error`)**:
     ```json
     {

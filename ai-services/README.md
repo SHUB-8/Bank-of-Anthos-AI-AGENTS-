@@ -43,39 +43,39 @@ The AI services layer consists of several microservices ("agents") that work tog
 
 ### 1. Orchestrator
 
-- **Role:** Entry point for all user queries. Handles NLU, entity resolution, and coordinates other agents.
-- **Endpoint:** `POST /v1/query`
-- **Authentication:** JWT required (loaded from Kubernetes secret, see manifests).
-- **Interactions:** Calls Gemini API (intent parsing), Contact-Sage (recipient resolution), Anomaly-Sage (risk analysis), Transaction-Sage (execution), and core services.
+- **Role:** Central "brain" and entry point for all natural language user interactions.
+- **AI Engine:** **Google Gemini** (via Vertex AI or Gemini API).
+- **Function:** Handles Natural Language Understanding (NLU), entity extraction (finding names, amounts), and intent classification.
+- **Endpoint:** `POST /chat` (Conversation)
+- **Authentication:** JWT required.
+- **Interactions:** Coordinates calls to all other "Sage" services based on user intent.
 
-### 2. Contact-Sage
+### 2. Anomaly-Sage
 
-- **Role:** Resolves contact names to account numbers, manages user contacts.
-- **Endpoints:**
-    - `GET /health` — Service health check.
-    - `GET /contacts/{account_id}` — Get all contacts (proxies to core contacts service).
-    - `POST /contacts/{account_id}` — Add new contact (proxies to core contacts service).
-    - `PUT /contacts/{account_id}/{contact_label}` — Update contact (direct DB).
-    - `DELETE /contacts/{account_id}/{contact_label}` — Delete contact (direct DB).
-    - `POST /contacts/resolve` — Fuzzy resolve contact name (direct DB).
-- **Authentication:** JWT required for all except `/health` (JWT loaded from secret).
-- **Backend:** Hybrid proxy to core contacts service and direct access to `accounts-db` for advanced features.
-- **Config:** All API keys and config loaded from Kubernetes secrets/manifests.
+- **Role:** Security and Fraud Detection.
+- **Function:** Analyzes every proposed transaction against user history. Checks for spikes in velocity, amount deviations, and new recipients.
+- **Output:** Returns a risk score (0-1), a classification (`normal`, `suspicious`, `fraud`), and *explainable reasons* for the decision.
 
-### 3. Anomaly-Sage
+### 3. Money-Sage
 
-- **Role:** Performs risk analysis on transactions, flags suspicious activity.
-- **Endpoint:** `POST /v1/anomaly/check`
-- **Interactions:** Reads/writes to `user_profiles`, `anomaly_logs`, and `pending_confirmations` in AI-Meta DB.
-- **Config:** All API keys and config loaded from Kubernetes secrets/manifests.
+- **Role:** Financial Insights & Budgeting.
+- **AI Engine:** **Google Gemini** (for generating saving tips).
+- **Function:** Manages user budgets. Analyzes transaction history to generate spend summaries and personalized saving advice based on spending categories.
+- **Interactions:** Connects to `balancereader` for real-time balances.
 
 ### 4. Transaction-Sage
 
-- **Role:** Executes transactions after risk clearance.
-- **Endpoint:** `POST /v1/execute-transaction`
-- **Authentication:** JWT required (forwarded to ledgerwriter).
-- **Interactions:** Reads/writes to `idempotency_keys`, `transaction_logs`, and `budget_usage` in AI-Meta DB; calls core ledger service.
-- **Config:** All API keys and config loaded from Kubernetes secrets/manifests.
+- **Role:** Execution & Categorization.
+- **Function:** The "doer" of the group. Takes a validated transaction request, automatically categorizes it (e.g., "Dining", "Utilities") based on description, checks it against active budgets, and executes it via the core `ledgerwriter`.
+- **Logic:** Rejects transactions if they exceed defined budget limits.
+
+### 5. Contact-Sage
+
+- **Role:** Contact Intelligence.
+- **Function:** Manages the user's address book. Provides "fuzzy matching" to find contacts even with partial or slightly misspelled names (using `thefuzz`). Ensures internal contacts are valid users before saving.
+
+
+
 
 ---
 
@@ -85,75 +85,74 @@ The AI-Meta DB is a shared PostgreSQL database supporting all AI agents. Below i
 
 ### 1. anomaly_logs
 
-| Column Name   | Data Type          | Constraints / Default           |
-|---------------|--------------------|---------------------------------|
-| log_id        | UUID               | PK, DEFAULT `uuid_generate_v4()`|
-| transaction_id| BIGINT             |                                 |
-| account_id    | CHARACTER(10)      | NOT NULL                        |
-| risk_score    | FLOAT              |                                 |
-| status        | VARCHAR            |                                 |
-| created_at    | TIMESTAMP          | DEFAULT `now()`                 |
+| Column Name   | Data Type          | Constraints / Default           | Description                                  |
+|---------------|--------------------|---------------------------------|----------------------------------------------|
+| log_id        | UUID               | PK, DEFAULT `uuid_generate_v4()`| Unique identifier for the log entry          |
+| transaction_id| BIGINT             |                                 | Core ledger transaction ID (after execution) |
+| account_id    | CHARACTER(10)      | NOT NULL                        | User account number                          |
+| recipient_id  | CHARACTER(10)      |                                 | Recipient account number                     |
+| amount_cents  | INTEGER            | NOT NULL                        | Transaction amount in cents                  |
+| risk_score    | FLOAT              | NOT NULL                        | AI-calculated risk level (0-1)               |
+| status        | VARCHAR(20)        | NOT NULL, CHECK (...)           | `normal`, `pending`, `confirmed`, `fraud`, etc.|
+| anomaly_reasons| TEXT[]            |                                 | Array of reasons for the risk score          |
+| requested_at  | TIMESTAMPTZ        | DEFAULT `now()`                 | Initial request time                         |
+| confirmed_at  | TIMESTAMPTZ        |                                 | When user approved (if pending)              |
+| expires_at    | TIMESTAMPTZ        |                                 | Expiration for pending transactions          |
+| created_at    | TIMESTAMP          | DEFAULT `now()`                 | Record creation timestamp                    |
 
 ### 2. transaction_logs
 
-| Column Name   | Data Type          | Constraints / Default           |
-|---------------|--------------------|---------------------------------|
-| id            | UUID               | PK, DEFAULT `uuid_generate_v4()`|
-| transaction_id| BIGINT             |                                 |
-| account_id    | CHARACTER(10)      | NOT NULL                        |
-| amount        | INTEGER            | NOT NULL                        |
-| category      | VARCHAR            |                                 |
-| created_at    | TIMESTAMP          | DEFAULT `now()`                 |
+| Column Name   | Data Type          | Constraints / Default           | Description                                  |
+|---------------|--------------------|---------------------------------|----------------------------------------------|
+| id            | UUID               | PK, DEFAULT `uuid_generate_v4()`| Log entry ID                                 |
+| transaction_id| BIGINT             | NOT NULL                        | Reference to ledger transaction              |
+| anomaly_log_id| UUID               | FK → anomaly_logs(log_id)       | Link to risk analysis details                |
+| account_id    | CHARACTER(10)      | NOT NULL                        | Account involved (sender or receiver)        |
+| receiver_account_id | CHARACTER(10)|                               | Counterparty account (if internal)           |
+| amount        | INTEGER            | NOT NULL                        | Amount in cents                              |
+| transaction_type | VARCHAR(10)      | CHECK (debit/credit)            | Perspective of `account_id`                  |
+| category      | VARCHAR            |                                 | Spending category (Dining, Shopping, etc.)   |
+| description   | TEXT               |                                 | Transaction memo                             |
+| created_at    | TIMESTAMPTZ        | DEFAULT `now()`                 | When log was created                         |
 
 ### 3. budgets
 
-| Column Name   | Data Type          | Constraints / Default           |
-|---------------|--------------------|---------------------------------|
-| id            | UUID               | PK, DEFAULT `uuid_generate_v4()`|
-| account_id    | CHARACTER(10)      | NOT NULL                        |
-| category      | VARCHAR            | NOT NULL                        |
-| budget_limit  | INTEGER            | NOT NULL                        |
-| period_start  | DATE               | NOT NULL                        |
-| period_end    | DATE               |                                 |
+| Column Name   | Data Type          | Constraints / Default           | Description                                  |
+|---------------|--------------------|---------------------------------|----------------------------------------------|
+| id            | UUID               | PK, DEFAULT `uuid_generate_v4()`| Budget ID                                    |
+| account_id    | CHARACTER(10)      | NOT NULL                        | Owner account                                |
+| category      | VARCHAR            | NOT NULL                        | Spend category (e.g., Dining)                |
+| budget_limit  | INTEGER            | NOT NULL                        | Max spend in cents                           |
+| period_start  | DATE               | NOT NULL                        | Start date                                   |
+| period_end    | DATE               |                                 | End date (optional)                          |
 
 ### 4. budget_usage
 
-| Column Name   | Data Type          | Constraints / Default           |
-|---------------|--------------------|---------------------------------|
-| id            | UUID               | PK, DEFAULT `uuid_generate_v4()`|
-| account_id    | CHARACTER(10)      | NOT NULL                        |
-| category      | VARCHAR            | NOT NULL                        |
-| used_amount   | INTEGER            | NOT NULL                        |
-| period_start  | DATE               | NOT NULL                        |
-| period_end    | DATE               | NOT NULL                        |
+| Column Name   | Data Type          | Constraints / Default           | Description                                  |
+|---------------|--------------------|---------------------------------|----------------------------------------------|
+| id            | UUID               | PK, DEFAULT `uuid_generate_v4()`| Entry ID                                     |
+| account_id    | CHARACTER(10)      | NOT NULL                        | Owner account                                |
+| category      | VARCHAR            | NOT NULL                        | Spend category                               |
+| used_amount   | INTEGER            | NOT NULL                        | Current spend in cents                       |
+| period_start  | DATE               | NOT NULL                        | Start of tracking period                     |
+| period_end    | DATE               | NOT NULL                        | End of tracking period                       |
 
 ### 5. user_profiles
 
-| Column        | Type               | Constraints / Default           |
-|---------------|--------------------|---------------------------------|
-| profile_id    | UUID               | PK, DEFAULT `uuid_generate_v4()`|
-| account_id    | CHARACTER(10)      | UNIQUE, FK → users(accountid)   |
-| mean_txn_amount_cents | INTEGER    |                                 |
-| stddev_txn_amount_cents| INTEGER   |                                 |
-| active_hours  | INTEGER[]          |                                 |
-| threshold_suspicious_multiplier    | NUMERIC | DEFAULT `2.0`         |
-| threshold_fraud_multiplier | NUMERIC | DEFAULT `3.0`                 |
-| email_for_alerts | TEXT            |                                 |
-| created_at    | TIMESTAMPTZ        | DEFAULT `now()`                 |
+| Column Name   | Data Type          | Constraints / Default           | Description                                  |
+|---------------|--------------------|---------------------------------|----------------------------------------------|
+| profile_id    | UUID               | PK, DEFAULT `uuid_generate_v4()`| Profile ID                                   |
+| account_id    | CHARACTER(10)      | UNIQUE                          | Account reference                            |
+| txn_count     | INTEGER            | DEFAULT `0`                     | Total transactions for stats                 |
+| mean_txn_amount_cents | FLOAT      | DEFAULT `5000.0`                | Running average transaction size             |
+| m2_txn_amount | FLOAT              | DEFAULT `0.0`                   | Used for variance calculation                |
+| active_hours  | INTEGER[]          | DEFAULT `[8, ...]`              | Typical activity hours                       |
+| hour_frequency| INTEGER[]          | Array of 24                     | Activity distribution                        |
+| z_score_pending_threshold | FLOAT  | DEFAULT `2.0`                   | Threshold for suspicious flag                |
+| z_score_fraud_threshold   | FLOAT  | DEFAULT `3.5`                   | Threshold for fraud block                    |
+| created_at    | TIMESTAMPTZ        | DEFAULT `now()`                 | Record creation time                         |
 
-### 6. pending_confirmations
-
-| Column        | Type               | Constraints / Default           |
-|---------------|--------------------|---------------------------------|
-| confirmation_id| UUID              | PK, DEFAULT `uuid_generate_v4()`|
-| account_id    | CHARACTER(10)      | NOT NULL                        |
-| payload       | JSONB              | NOT NULL                        |
-| requested_at  | TIMESTAMPTZ        | DEFAULT `now()`                 |
-| expires_at    | TIMESTAMPTZ        | NOT NULL                        |
-| status        | TEXT               | CHECK (IN `('pending','confirmed','expired','cancelled')`), DEFAULT `'pending'` |
-| confirmation_method | TEXT         |                                 |
-
-### 7. idempotency_keys (for Transaction-Sage)
+### 6. idempotency_keys
 
 | Column        | Type               | Constraints / Default           | Description                      |
 |---------------|--------------------|---------------------------------|----------------------------------|
@@ -163,39 +162,58 @@ The AI-Meta DB is a shared PostgreSQL database supporting all AI agents. Below i
 | created_at    | TIMESTAMP          | DEFAULT `now()`                 | Request registration time        |
 | response_payload | JSONB           |                                 | Cached response for idempotency  |
 
-### 8. llm_envelopes (for Orchestrator, audit & replay)
+### 7. llm_envelopes (Audit & Replay)
 
 | Column        | Type               | Constraints / Default           | Description                      |
 |---------------|--------------------|---------------------------------|----------------------------------|
 | envelope_id   | UUID               | PK, DEFAULT `uuid_generate_v4()`| Envelope ID                      |
 | session_id    | VARCHAR            |                                 | Session group                    |
-| raw_llm       | JSONB              | NOT NULL                        | Raw Gemini/ADK response          |
+| raw_llm       | JSONB              | NOT NULL                        | Raw Gemini response              |
 | validated_envelope | JSONB         | NOT NULL                        | Structured plan                  |
 | correlation_id| VARCHAR            | NOT NULL                        | X-Correlation-ID                 |
 | idempotency_key | VARCHAR          |                                 | Link to idempotency_keys.key     |
 | created_at    | TIMESTAMPTZ        | DEFAULT `now()`                 | Envelope creation time           |
 
-### 9. agent_memory (short-term + persistent memory store)
+### 8. agent_memory
 
 | Column        | Type               | Constraints / Default           | Description                      |
 |---------------|--------------------|---------------------------------|----------------------------------|
 | id            | UUID               | PK, DEFAULT `uuid_generate_v4()`| Memory record ID                 |
 | session_id    | VARCHAR            | NOT NULL                        | Session identifier               |
-| key           | VARCHAR            | NOT NULL                        | Memory key                       |
-| value         | JSONB              | NOT NULL                        | Stored value                     |
+| key           | VARCHAR            | NOT NULL                        | Context key (e.g., 'history')    |
+| value         | JSONB              | NOT NULL                        | Stored JSON data                 |
 | created_at    | TIMESTAMPTZ        | DEFAULT `now()`                 | Entry creation time              |
-| expires_at    | TIMESTAMPTZ        |                                 | Optional expiry                  |
+| expires_at    | TIMESTAMPTZ        |                                 | Optional TTL                     |
 
-### 10. envelope_correlations (link envelopes to downstream actions)
+### 9. envelope_correlations
 
 | Column        | Type               | Constraints / Default           | Description                      |
 |---------------|--------------------|---------------------------------|----------------------------------|
-| id            | UUID               | PK, DEFAULT `uuid_generate_v4()`| Correlation row                  |
-| envelope_id   | UUID               | NOT NULL                        | FK → llm_envelopes.envelope_id   |
-| anomaly_log_id| UUID               |                                 | FK → anomaly_logs.log_id         |
-| confirmation_id| VARCHAR           |                                 | FK → pending_confirmations.confirmation_id |
-| transaction_id| VARCHAR            |                                 | FK → transaction_logs.transaction_id |
+| id            | UUID               | PK, DEFAULT `uuid_generate_v4()`| Correlation record ID            |
+| envelope_id   | UUID               | NOT NULL, FK                    | Reference to `llm_envelopes`     |
+| anomaly_log_id| UUID               |                                 | Reference to `anomaly_logs`      |
+| confirmation_id| VARCHAR           |                                 | Reference to confirmation task   |
+| transaction_id| VARCHAR            |                                 | Reference to core transaction    |
 | created_at    | TIMESTAMPTZ        | DEFAULT `now()`                 | Correlation creation time        |
+
+### 10. exchange_rates
+
+| Column        | Type               | Constraints / Default           | Description                      |
+|---------------|--------------------|---------------------------------|----------------------------------|
+| currency_code | VARCHAR(3)         | UNIQUE                          | ISO code (e.g., EUR)             |
+| rate_to_usd   | NUMERIC(18,8)      | NOT NULL                        | Conversion rate to USD           |
+| last_updated  | TIMESTAMPTZ        | DEFAULT `now()`                 | Rate freshness                   |
+
+### 11. session_metadata
+
+| Column        | Type               | Constraints / Default           | Description                      |
+|---------------|--------------------|---------------------------------|----------------------------------|
+| session_id    | VARCHAR(255)       | PK                              | Session identifier               |
+| account_id    | VARCHAR(50)        | NOT NULL                        | User account number              |
+| created_at    | TIMESTAMPTZ        | DEFAULT `now()`                 | Session creation time            |
+| last_activity | TIMESTAMPTZ        | DEFAULT `now()`                 | Session timeout tracking         |
+| message_count | NUMERIC            | DEFAULT 0                       | Messages in session              |
+| metadata      | JSON               |                                 | Additional session data          |
 
 ---
 
