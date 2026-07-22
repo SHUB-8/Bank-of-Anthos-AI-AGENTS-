@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-shared-config
+data:
+  # Cluster-internal URLs for AI agents
+  CONTACT_SAGE_URL: "http://contact-sage:8083"
+  MONEY_SAGE_URL: "http://money-sage:8084"
+  ANOMALY_SAGE_URL: "http://anomaly-sage:8085"
+  TRANSACTION_SAGE_URL: "http://transaction-sage:8086"
+
+  # Core services
+  BALANCE_READER_URL: "http://balancereader:8080"
+  TRANSACTION_HISTORY_URL: "http://transactionhistory:8080"
+  LEDGERWRITER_URL: "http://ledgerwriter:8080"
+  CONTACTS_SERVICE_URL: "http://contacts:8080"
+
+  # Databases (URIs expected by services)
+  AI_META_DB_URI: "postgresql://ai-meta-db:ai-meta-db@ai-meta-db:5432/ai-meta-db"
+  ACCOUNTS_DB_URI: "postgresql://accounts-admin:accounts-pwd@accounts-db:5432/accounts-db"
+

@@ -241,16 +241,11 @@ go/
 *.log
 *.bak
 *.cache
-*.yaml
-*.yml
-*.json
+# Secret manifests with real keys (DO NOT commit)
+extras/jwt/jwt-secret.yaml
 private*
 certificate*
 src/frontend/.env
 src/userservice/.env
 src/contacts/.env
-
-!mcp-servers/**/k8s/*.yaml
-!mcp-servers/**/k8s/*.yml
-!New_Frontend/k8s/*.yaml
-!New_Frontend/k8s/*.yml
+

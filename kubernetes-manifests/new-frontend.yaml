@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    application: bank-of-anthos
+    environment: development
+    team: frontend
+    tier: web
+  name: new-frontend
+spec:
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+  selector:
+    app: new-frontend
+  type: LoadBalancer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    application: bank-of-anthos
+    environment: development
+    team: frontend
+    tier: web
+  name: new-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: new-frontend
+  template:
+    metadata:
+      labels:
+        app: new-frontend
+    spec:
+      containers:
+        - name: new-frontend
+          image: new-frontend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+          resources:
+            limits:
+              cpu: 250m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi

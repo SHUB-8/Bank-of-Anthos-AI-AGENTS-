@@ -1,0 +1,15 @@
+apiVersion: skaffold/v2beta29
+kind: Config
+metadata:
+  name: new-frontend
+build:
+  artifacts:
+  - image: new-frontend
+    context: .
+    docker:
+      dockerfile: Dockerfile
+manifests:
+  rawYaml:
+  - ../kubernetes-manifests/new-frontend.yaml
+deploy:
+  kubectl: {}
