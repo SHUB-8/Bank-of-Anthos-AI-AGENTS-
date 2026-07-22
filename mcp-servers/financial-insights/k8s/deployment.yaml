@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-financial-insights
+  labels:
+    app: mcp-financial-insights
+    tier: mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-financial-insights
+  template:
+    metadata:
+      labels:
+        app: mcp-financial-insights
+        tier: mcp
+    spec:
+      containers:
+        - name: mcp-financial-insights
+          image: mcp-financial-insights:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+              name: sse
+          env:
+            - name: MCP_PORT
+              value: "8080"
+            - name: MONEY_SAGE_URL
+              value: "http://money-sage:8084"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-financial-insights
+  labels:
+    app: mcp-financial-insights
+    tier: mcp
+spec:
+  type: NodePort
+  selector:
+    app: mcp-financial-insights
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 31300
+      protocol: TCP
+      name: sse

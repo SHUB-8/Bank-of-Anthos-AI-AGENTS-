@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-identity-contacts
+  labels:
+    app: mcp-identity-contacts
+    tier: mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-identity-contacts
+  template:
+    metadata:
+      labels:
+        app: mcp-identity-contacts
+        tier: mcp
+    spec:
+      containers:
+        - name: mcp-identity-contacts
+          image: mcp-identity-contacts:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+              name: sse
+          env:
+            - name: MCP_PORT
+              value: "8080"
+            - name: USERSERVICE_URL
+              value: "http://userservice:8080"
+            - name: CONTACT_SAGE_URL
+              value: "http://contact-sage:8083"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-identity-contacts
+  labels:
+    app: mcp-identity-contacts
+    tier: mcp
+spec:
+  type: NodePort
+  selector:
+    app: mcp-identity-contacts
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 31100
+      protocol: TCP
+      name: sse

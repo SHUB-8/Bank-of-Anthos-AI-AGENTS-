@@ -15,6 +15,12 @@ settings.json
 pyvenv.cfg
 kubernetes-manifests/api-keys-secret.yaml
 
+# Keep remote deployment manifests and frontend k8s files in version control
+!mcp-servers/**/k8s/*.yaml
+!mcp-servers/**/k8s/*.yml
+!New_Frontend/k8s/*.yaml
+!New_Frontend/k8s/*.yml
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -243,3 +249,8 @@ certificate*
 src/frontend/.env
 src/userservice/.env
 src/contacts/.env
+
+!mcp-servers/**/k8s/*.yaml
+!mcp-servers/**/k8s/*.yml
+!New_Frontend/k8s/*.yaml
+!New_Frontend/k8s/*.yml
